@@ -23,7 +23,7 @@ name = "OandONE"
 age: int = 16
 
 if (age == 16) {
-    Write(f"{name} is {age}")
+    Write("Sweet sixteen!")
 }
 ```
 
@@ -39,9 +39,9 @@ if (age == 16) {
 · ✅ if/elif/else — C# gets else if
 · ✅ for (i in n) — becomes foreach + Enumerable.Range
 · ✅ while, try/catch, ++/--
+· ✅ Functions — with modifiers, type hints, and return types
 · ✅ Comments: # → //
 · 🚧 Classes (in progress)
-· 🚧 Functions (in progress)
 · 🚧 Imports (in progress)
 
 ---
@@ -63,7 +63,7 @@ dotnet build
 ```spy
 // hello.spy
 name = "World"
-Write(f"Hello {name}!")
+Write("Hello " + name + "!")
 ```
 
 2. Run with SharpThon
@@ -109,25 +109,28 @@ Loops
 
 ```spy
 for (i in 5) {
-    Write(i)   // 0, 1, 2, 3, 4
+    Write("Count: " + i)
 }
 
 counter = 0
 while (counter < 3) {
-    Write(counter)
+    Write("While: " + counter)
     counter++
 }
 ```
 
-Error Handling
+Functions
 
 ```spy
-try {
-    risky_code()
+def add(a: int, b: int) -> int {
+    return a + b
 }
-catch (Exception e) {
-    Write(e)
+Write("5 + 3 = " + add(5, 3))
+
+def greet(name) {
+    Write("Hello " + name + "!")
 }
+greet("Developer")
 ```
 
 ---
@@ -138,7 +141,7 @@ catch (Exception e) {
 SharpThon (.spy) → Transpiler → C# (.cs) → .NET Build → Run
 ```
 
-The transpiler is written in C#.
+The transpiler is written in C# using Regex.
 A Python prototype is also available in python_transpiler/.
 
 ---
@@ -153,11 +156,12 @@ SharpThon/
 │   └── runner.py
 ├── sharpton_cs/            # C# transpiler (current)
 │   ├── Sharpton.Core/      # Core library
-│   │   └── Transpiler.cs
+│   │   ├── Transpiler.cs
+│   │   └── Parser.cs       # Sprache-based (WIP)
 │   ├── Sharpton.Cli/       # CLI tool
 │   │   └── Program.cs
 │   └── Sharpton.sln
-├── test.spy                # Sample files
+├── test.spy                # Demo file
 └── README.md
 ```
 
@@ -167,10 +171,11 @@ SharpThon/
 
 Phase Status
 Python MVP ✅ Complete
-C# Transpiler (basic) ✅ Complete
-Functions (def) 🚧 In progress
-Classes (class) 🚧 In progress
-Imports (import x.y) 🚧 In progress
+C# Transpiler (Regex) ✅ Complete
+Functions with modifiers ✅ Complete
+Sprache Parser 🚧 In progress
+Classes (class) ❌
+Imports (import x.y) ❌
 for (i=0;i<10;i++) (C-style) ❌
 Self-hosting (transpile SharpThon with SharpThon) ❌
 NuGet package ❌
