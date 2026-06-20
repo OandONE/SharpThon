@@ -1,5 +1,50 @@
-def add(a: int, b: int) {
-    return a + b
+// test.spy — SharpThon Demo
+name = "SharpThon"
+version = "0.1.0"
+age: int = 16
+
+Write("=== Welcome to SharpThon! ===")
+Write("Name: " + name)
+Write("Version: " + version)
+Write("Age: " + age)
+
+Write("")
+Write("=== If/Else ===")
+if (age == 16) {
+    Write("Sweet sixteen!")
+}
+elif (age > 16) {
+    Write("Adult")
+}
+else {
+    Write("Young")
 }
 
-Write(add(5, 3))
+Write("")
+Write("=== For Loop ===")
+for (i in 5) {
+    Write("Count: " + i)
+}
+
+Write("")
+Write("=== While Loop ===")
+counter = 0
+while (counter < 3) {
+    Write("While: " + counter)
+    counter++
+}
+
+Write("")
+Write("=== Functions ===")
+def add(a: int, b: int) -> int {
+    return a + b
+}
+Write("5 + 3 = " + add(5, 3))
+
+def greet(name) {
+    Write("Hello " + name + "!")
+}
+greet("Developer")
+
+Write("")
+Write("=== All tests passed! ===")
