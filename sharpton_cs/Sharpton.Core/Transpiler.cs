@@ -8,7 +8,7 @@ public class Transpiler
     {
         var cs = spCode;
 
-        // ── ۱. کامنت‌ها: # → // ──
+        // ── ۱. commants: # → // ──
         var lines = cs.Split('\n');
         for (int i = 0; i < lines.Length; i++)
         {
@@ -20,7 +20,7 @@ public class Transpiler
         }
         cs = string.Join('\n', lines);
 
-        // ── ۲. ; به خطوطی که ندارن ──
+        // ── ۲. ──
         lines = cs.Split('\n');
         for (int i = 0; i < lines.Length; i++)
         {
@@ -45,7 +45,7 @@ public class Transpiler
         // counter: int = 0 → int counter = 0
         cs = Regex.Replace(cs, @"(\w+)\s*:\s*(\w+)\s*=", "$2 $1 =");
 
-        // بقیه (بدون type) → var
+        // other (no type) → var
         cs = Regex.Replace(cs, @"^(\w+)\s*=", @"var $1 =", RegexOptions.Multiline);
 
         // ── ۴. for (i in 3) → foreach با Range ─ـ
@@ -58,7 +58,7 @@ public class Transpiler
         // ── ۶. elif → else if ─ـ
         cs = Regex.Replace(cs, @"\belif\b", "else if");
 
-        // ── ۷. def → تابع C# ─ـ
+        // ── ۷. def → func C# ─ـ
         cs = Regex.Replace(cs, @"(public\s+|private\s+|static\s+)*def\s+(\w+)\s*\(([^)]*)\)\s*(->\s*(\w+))?\s*\{", match =>
         {
             var modifier = match.Groups[1].Value.Trim();
