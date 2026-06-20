@@ -59,12 +59,64 @@ public string Transpile(string spCode)
     cs = Regex.Replace(cs, @"\belif\b", "else if");
 
     // ── ۷. def → تابع C# (موقت: حذف def) ─ـ
-    cs = Regex.Replace(cs, @"def\s+(\w+)\s*\((.*?)\)\s*\{", match =>
+    // cs = Regex.Replace(cs, @"def\s+(\w+)\s*\((.*?)\)\s*\{", match =>
+    // {
+    //     var name = match.Groups[1].Value;
+    //     var args = match.Groups[2].Value;
+    //     return $"static int {name}({args}) {{";
+    // });
+
+    cs = Regex.Replace(cs, @"(public\s+|private\s+|static\s+)*def\s+(\w+)\s*\(([^)]*)\)\s*(->\s*(\w+))?\s*\{", match =>
+{
+    var fullMatch = match.Value;
+    var modifier = match.Groups[1].Value.Trim();
+    var name = match.Groups[2].Value;
+    var args = match.Groups[3].Value.Trim();
+    var returnType = "void";
+
+    if (match.Groups.Count >= 6 && match.Groups[5].Success)
     {
-        var name = match.Groups[1].Value;
-        var args = match.Groups[2].Value;
-        return $"static int {name}({args}) {{";
-    });
+        returnType = match.Groups[5].Value;
+    }
+    else
+    {
+        // چک کن return توی بدنه هست یا نه
+        // پیدا کردن بسته شدن } این تابع
+        var bodyStart = match.Index + match.Length;
+        var bodyEnd = cs.IndexOf('}', bodyStart);
+        if (bodyEnd > bodyStart)
+        {
+            var body = cs.Substring(bodyStart, bodyEnd - bodyStart);
+            if (Regex.IsMatch(body, @"\breturn\b"))
+                returnType = "object";
+        }
+    }
+
+    if (string.IsNullOrEmpty(modifier))
+        modifier = "static";
+
+    if (!string.IsNullOrEmpty(args))
+    {
+        var parts = args.Split(',');
+        var converted = new List<string>();
+        foreach (var part in parts)
+        {
+            var trimmed = part.Trim();
+            if (trimmed.Contains(':'))
+            {
+                var split = trimmed.Split(':');
+                converted.Add($"{split[1].Trim()} {split[0].Trim()}");
+            }
+            else
+            {
+                converted.Add($"object {trimmed}");
+            }
+        }
+        args = string.Join(", ", converted);
+    }
+
+    return $"{modifier} {returnType} {name}({args}) {{";
+});
 
     return cs;
 }
