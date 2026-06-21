@@ -13,10 +13,9 @@
 
 ## 🤔 Why SharpThon?
 
-Python is simple. C# is fast. **SharpThon** gives you both.
+Python is simple. C# is fast. **SharpThon** gives you both — with the future of ASP.NET and EF Core built-in.
 
-Write Python-like code with C# syntax — braces, semicolons, and type hints.  
-Transpile to **clean C#** and run anywhere .NET runs.
+Write Python-like code with C# syntax. Transpile to **clean C#** and run anywhere .NET runs.
 
 ```spy
 name = "OandONE"
@@ -34,15 +33,38 @@ if (age == 16) {
 · ✅ Python-like syntax — familiar, readable
 · ✅ C# target — transpiles to clean, idiomatic C#
 · ✅ Optional type hints — x = 10 or x: int = 10
+· ✅ str → string, Any → object — seamless C# mapping
 · ✅ Braces {} — no more indentation errors
 · ✅ Write() — same as print() or Console.WriteLine()
 · ✅ if/elif/else — C# gets else if
 · ✅ for (i in n) — becomes foreach + Enumerable.Range
 · ✅ while, try/catch, ++/--
-· ✅ Functions — with modifiers, type hints, and return types
+· ✅ Functions — with modifiers (public, static), type hints, and return types
 · ✅ Comments: # → //
+· 🚧 ANTLR Parser (in progress — replacing Regex)
 · 🚧 Classes (in progress)
 · 🚧 Imports (in progress)
+
+---
+
+🎯 Vision
+
+SharpThon will become a complete .NET development language:
+
+```spy
+// ASP.NET Core
+class HomeController {
+    public def Index() -> IActionResult {
+        return View("Index", 50)
+    }
+}
+
+// EF Core
+class User : DbContext {
+    public int Id { get; set; }
+    public string Name { get; set; }
+}
+```
 
 ---
 
@@ -89,6 +111,8 @@ name = "Ali"          // type inferred
 age: int = 16         // explicit type
 pi = 3.14             // double
 is_dev = true         // bool
+text: str = "Hello"   // str → string in C#
+data: Any = 42        // Any → object in C#
 ```
 
 Conditions
@@ -122,12 +146,12 @@ while (counter < 3) {
 Functions
 
 ```spy
-def add(a: int, b: int) -> int {
+public def add(a: int, b: int) -> int {
     return a + b
 }
 Write("5 + 3 = " + add(5, 3))
 
-def greet(name) {
+static def greet(name: str) {
     Write("Hello " + name + "!")
 }
 greet("Developer")
@@ -141,7 +165,7 @@ greet("Developer")
 SharpThon (.spy) → Transpiler → C# (.cs) → .NET Build → Run
 ```
 
-The transpiler is written in C# using Regex.
+The transpiler is written in C#. ANTLR parser is replacing Regex for production-ready parsing.
 A Python prototype is also available in python_transpiler/.
 
 ---
@@ -157,7 +181,8 @@ SharpThon/
 ├── sharpton_cs/            # C# transpiler (current)
 │   ├── Sharpton.Core/      # Core library
 │   │   ├── Transpiler.cs
-│   │   └── Parser.cs       # Sprache-based (WIP)
+│   │   ├── Parser.cs       # Sprache-based
+│   │   └── SharpThon.g4    # ANTLR grammar
 │   ├── Sharpton.Cli/       # CLI tool
 │   │   └── Program.cs
 │   └── Sharpton.sln
@@ -173,10 +198,13 @@ Phase Status
 Python MVP ✅ Complete
 C# Transpiler (Regex) ✅ Complete
 Functions with modifiers ✅ Complete
-Sprache Parser 🚧 In progress
+str → string, Any type ✅ Complete
+ANTLR Parser 🚧 In progress
 Classes (class) ❌
 Imports (import x.y) ❌
 for (i=0;i<10;i++) (C-style) ❌
+ASP.NET Core support ❌
+EF Core support ❌
 Self-hosting (transpile SharpThon with SharpThon) ❌
 NuGet package ❌
 
@@ -192,5 +220,4 @@ MIT © OandONE
 
 Inspired by Python (simplicity) and C# (power).
 
-
-Built by a developer who wanted braces in Python.
+Built by a developer who wanted braces in Python — and the full power of .NET.
