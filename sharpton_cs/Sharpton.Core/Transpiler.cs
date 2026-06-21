@@ -18,17 +18,10 @@ public class Transpiler
         }
         spCode = string.Join('\n', cleaned);
 
-        // ── 3. for (i in 5) { → foreach ─ـ
-        spCode = Regex.Replace(spCode, @"for\s*\((\w+)\s+in\s+(\d+)\)\s*\{", 
-            @"foreach (var $1 in Enumerable.Range(0, $2)) {");
-
-        // ── 4. while (cond) { ─ـ
-        spCode = Regex.Replace(spCode, @"while\s*\((.+)\)\s*\{", @"while ($1) {");
-
-        // ── 5. ++ → += 1 ─ـ
+        // ── 3. ++ → += 1 ─ـ
         spCode = Regex.Replace(spCode, @"(\w+)\+\+", "$1 += 1");
 
-        // ── 6. def → func C# ─ـ
+        // ── 4. def → func C# ─ـ
         spCode = Regex.Replace(spCode, @"def\s+(\w+)\s*\(([^)]*)\)\s*(->\s*(\w+))?\s*\{", match =>
         {
             var name = match.Groups[1].Value;
@@ -59,7 +52,7 @@ public class Transpiler
 
         spCode = Regex.Replace(spCode, @"Write\(", "Console.WriteLine(");
 
-        // ── ۷. Sprache Parse Line ─ـ
+        // ── 5. Sprache Parse Line ─ـ
         var results = new List<string>();
         foreach (var line in spCode.Split('\n'))
         {
