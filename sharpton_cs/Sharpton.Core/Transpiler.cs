@@ -120,6 +120,9 @@ public class Transpiler
             return $"{modifier} {returnType} {name}({args}) {{";
         });
 
+        // Any → object
+        cs = Regex.Replace(cs, @"\bAny\b", "object");
+
         return cs;
     }
 }
