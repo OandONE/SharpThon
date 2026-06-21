@@ -7,7 +7,7 @@ public class Transpiler
 {
     public string Transpile(string spCode)
     {
-        // ── 1. Delete Comments ──
+        // ── Delete Comments ──
         var lines = spCode.Split('\n');
         var cleaned = new List<string>();
         foreach (var line in lines)
@@ -18,41 +18,20 @@ public class Transpiler
         }
         spCode = string.Join('\n', cleaned);
 
-        // ── 3. ++ → += 1 ─ـ
-        spCode = Regex.Replace(spCode, @"(\w+)\+\+", "$1 += 1");
-
-        // ── 4. def → func C# ─ـ
-        spCode = Regex.Replace(spCode, @"def\s+(\w+)\s*\(([^)]*)\)\s*(->\s*(\w+))?\s*\{", match =>
+        spCode = Regex.Replace(spCode, @"Write\((.+)\)", match =>
         {
-            var name = match.Groups[1].Value;
-            var args = match.Groups[2].Value.Trim();
-            var returnType = match.Groups[4].Success ? match.Groups[4].Value : "void";
-            if (returnType == "str") returnType = "string";
-            if (returnType == "Any") returnType = "object";
-
-            var converted = new List<string>();
-            if (!string.IsNullOrEmpty(args))
+            var inner = match.Groups[1].Value;
+            int depth = 0;
+            for (int i = 0; i < inner.Length; i++)
             {
-                foreach (var part in args.Split(','))
-                {
-                    var p = part.Trim();
-                    if (p.Contains(':'))
-                    {
-                        var s = p.Split(':');
-                        var t = s[1].Trim();
-                        if (t == "str") t = "string";
-                        if (t == "Any") t = "object";
-                        converted.Add($"{t} {s[0].Trim()}");
-                    }
-                    else converted.Add($"object {p}");
-                }
+                if (inner[i] == '(') depth++;
+                if (inner[i] == ')') depth--;
+                if (depth < 0) return $"Console.WriteLine({inner.Substring(0, i)});";
             }
-            return $"static {returnType} {name}({string.Join(", ", converted)}) {{";
+            return $"Console.WriteLine({inner});";
         });
 
-        spCode = Regex.Replace(spCode, @"Write\(", "Console.WriteLine(");
-
-        // ── 5. Sprache Parse Line ─ـ
+        // ── Sprache Parse Line ─ـ
         var results = new List<string>();
         foreach (var line in spCode.Split('\n'))
         {
