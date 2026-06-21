@@ -8,7 +8,7 @@ public class Transpiler
     {
         var cs = spCode;
 
-        // ── ۱. commants: # → // ──
+        // ── 1. commants: # → // ──
         var lines = cs.Split('\n');
         for (int i = 0; i < lines.Length; i++)
         {
@@ -20,7 +20,7 @@ public class Transpiler
         }
         cs = string.Join('\n', lines);
 
-        // ── ۲. ──
+        // ── 2 semicolon ──
         lines = cs.Split('\n');
         for (int i = 0; i < lines.Length; i++)
         {
@@ -48,17 +48,17 @@ public class Transpiler
         // other (no type) → var
         cs = Regex.Replace(cs, @"^(\w+)\s*=", @"var $1 =", RegexOptions.Multiline);
 
-        // ── ۴. for (i in 3) → foreach با Range ─ـ
+        // ── 4. for (i in 3) → foreach با Range ─ـ
         cs = Regex.Replace(cs, @"for\s*\((\w+)\s+in\s+(\d+)\)\s*\{", 
             @"foreach (var $1 in Enumerable.Range(0, $2)) {");
 
-        // ── ۵. Write → Console.WriteLine ─ـ
+        // ── 5. Write → Console.WriteLine ─ـ
         cs = Regex.Replace(cs, @"Write\(", "Console.WriteLine(");
 
-        // ── ۶. elif → else if ─ـ
+        // ── 6. elif → else if ─ـ
         cs = Regex.Replace(cs, @"\belif\b", "else if");
 
-        // ── ۷. def → func C# ─ـ
+        // ── 7. def → func C# ─ـ
         cs = Regex.Replace(cs, @"(public\s+|private\s+|static\s+)*def\s+(\w+)\s*\(([^)]*)\)\s*(->\s*(\w+))?\s*\{", match =>
         {
             var modifier = match.Groups[1].Value.Trim();
@@ -68,6 +68,12 @@ public class Transpiler
 
             if (match.Groups.Count >= 6 && match.Groups[5].Success)
                 returnType = match.Groups[5].Value;
+                if (returnType == "str") {
+                    returnType = "string";
+                }
+                else if (returnType == "Any"){
+                    returnType = "object";
+                }
             else
             {
                 var bodyStart = match.Index + match.Length;
@@ -93,7 +99,15 @@ public class Transpiler
                     if (trimmed.Contains(':'))
                     {
                         var split = trimmed.Split(':');
-                        converted.Add($"{split[1].Trim()} {split[0].Trim()}");
+                        var NameType = split[1].Trim();
+                        var NameVar = split[0].Trim();
+                        if (NameType == "str") {
+                            NameType = "string";
+                        }
+                        else if (NameType == "Any"){
+                            NameType = "object";
+                        }
+                        converted.Add($"{NameType} {NameVar}");
                     }
                     else
                     {
