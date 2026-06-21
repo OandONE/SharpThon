@@ -83,7 +83,7 @@ public static class SharpThonParser
 
     // ── Line ─ـ
     public static readonly Parser<string> Line = 
-    VariableDecl.Or(IfStatement).Or(ElifStatement).Or(ElseStatement).Or(CloseBrace);
+        VariableDecl.Or(IfStatement).Or(ElifStatement).Or(ElseStatement).Or(CloseBrace).Or(ForLoop).Or(WhileLoop);
 
     // ── Program ─ـ
     public static readonly Parser<string> Program = 
