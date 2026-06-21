@@ -29,14 +29,6 @@ public static class SharpThonParser
             ? $"{(type.Get() == "str" ? "string" : type.Get() == "Any" ? "object" : type.Get())} {name} = {value.Trim()};"
             : $"var {name} = {value.Trim()};";
 
-    // ── Write ─ـ
-    public static readonly Parser<string> WriteCall = 
-        from write in Parse.String("Write")
-        from open in Parse.Char('(').Token()
-        from args in Parse.CharExcept(")").AtLeastOnce().Text()
-        from close in Parse.Char(')').Token()
-        select $"Console.WriteLine({args});";
-
     // ── If ─ـ
     public static readonly Parser<string> IfStatement = 
         from ifKw in Parse.String("if").Token()
@@ -80,10 +72,51 @@ public static class SharpThonParser
         from condition in Parse.CharExcept(")").AtLeastOnce().Text()
         from closeP in Parse.Char(')').Token()
         select $"while ({condition}) {{";
+    
+    // ── Function ─ـ
+    public static readonly Parser<string> FunctionDecl = 
+        from modifier in Parse.String("public").Or(Parse.String("private")).Or(Parse.String("static")).Text().Token().Optional()
+        from defKw in Parse.String("def").Token()
+        from name in Identifier
+        from openP in Parse.Char('(').Token()
+        from args in (
+            from param in Identifier
+            from type in (
+                from colon in Parse.Char(':').Token()
+                from t in Parse.String("int").Or(Parse.String("str")).Or(Parse.String("bool")).Or(Parse.String("float")).Or(Parse.String("object")).Or(Parse.String("Any")).Text().Token()
+                select t
+            ).Optional()
+            select type.IsDefined 
+                ? $"{(type.Get() == "str" ? "string" : type.Get() == "Any" ? "object" : type.Get())} {param}" 
+                : $"object {param}"
+        ).DelimitedBy(Parse.Char(',').Token())
+        from closeP in Parse.Char(')').Token()
+        from returnType in (
+            from arrow in Parse.String("->").Token()
+            from t in Parse.String("int").Or(Parse.String("str")).Or(Parse.String("bool")).Or(Parse.String("float")).Or(Parse.String("object")).Or(Parse.String("void")).Or(Parse.String("Any")).Text().Token()
+            select t
+        ).Optional()
+        select $"{(modifier.IsDefined ? modifier.Get() + " " : "static ")}{(returnType.IsDefined ? (returnType.Get() == "str" ? "string" : returnType.Get() == "Any" ? "object" : returnType.Get()) : "void")} {name}({string.Join(", ", args)}) {{";
+
+    // ── Write ─ـ
+    public static readonly Parser<string> WriteCall = 
+        from write in Parse.String("Write").Token()
+        from open in Parse.Char('(').Token()
+        from args in (
+            from arg in Parse.CharExcept(",)\n\r").AtLeastOnce().Text()
+            select arg.Trim()
+        ).DelimitedBy(Parse.Char(',').Token())
+        from close in Parse.Char(')').Token()
+        select $"Console.WriteLine({string.Join(", ", args)});";
+    
+    public static readonly Parser<string> Increment = 
+        from name in Identifier
+        from plus in Parse.String("++").Token()
+        select $"{name} += 1;";
 
     // ── Line ─ـ
     public static readonly Parser<string> Line = 
-        VariableDecl.Or(IfStatement).Or(ElifStatement).Or(ElseStatement).Or(CloseBrace).Or(ForLoop).Or(WhileLoop);
+        WriteCall.Or(VariableDecl).Or(FunctionDecl).Or(IfStatement).Or(ElifStatement).Or(ElseStatement).Or(CloseBrace).Or(ForLoop).Or(WhileLoop).Or(Increment);
 
     // ── Program ─ـ
     public static readonly Parser<string> Program = 
