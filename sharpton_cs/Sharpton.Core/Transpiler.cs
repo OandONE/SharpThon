@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Sprache;
 
 namespace Sharpton.Core;
 
@@ -6,123 +7,89 @@ public class Transpiler
 {
     public string Transpile(string spCode)
     {
-        var cs = spCode;
-
-        // ── 1. commants: # → // ──
-        var lines = cs.Split('\n');
-        for (int i = 0; i < lines.Length; i++)
+        // ── 1. Delete Comments ──
+        var lines = spCode.Split('\n');
+        var cleaned = new List<string>();
+        foreach (var line in lines)
         {
-            var line = lines[i];
-            if (line.TrimStart().StartsWith('#'))
-            {
-                lines[i] = line.Replace("#", "//");
-            }
+            var trimmed = line.Trim();
+            if (!trimmed.StartsWith("//") && !trimmed.StartsWith('#'))
+                cleaned.Add(line);
         }
-        cs = string.Join('\n', lines);
+        spCode = string.Join('\n', cleaned);
 
-        // ── 2 semicolon ──
-        lines = cs.Split('\n');
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var line = lines[i].Trim();
-            if (!string.IsNullOrEmpty(line) && 
-                !line.EndsWith(';') && 
-                !line.EndsWith('{') && 
-                !line.EndsWith('}') &&
-                !line.StartsWith("//") &&
-                !line.StartsWith("def ") &&
-                !line.StartsWith("class ") &&
-                !line.StartsWith("try") &&
-                !line.StartsWith("catch") &&
-                !line.StartsWith("else") &&
-                !line.StartsWith("elif"))
-            {
-                lines[i] = lines[i].TrimEnd() + ";";
-            }
-        }
-        cs = string.Join('\n', lines);
-
-        // counter: int = 0 → int counter = 0
-        cs = Regex.Replace(cs, @"(\w+)\s*:\s*(\w+)\s*=", "$2 $1 =");
-
-        // other (no type) → var
-        cs = Regex.Replace(cs, @"^(\w+)\s*=", @"var $1 =", RegexOptions.Multiline);
-
-        // ── 4. for (i in 3) → foreach با Range ─ـ
-        cs = Regex.Replace(cs, @"for\s*\((\w+)\s+in\s+(\d+)\)\s*\{", 
+        // ── 3. for (i in 5) { → foreach ─ـ
+        spCode = Regex.Replace(spCode, @"for\s*\((\w+)\s+in\s+(\d+)\)\s*\{", 
             @"foreach (var $1 in Enumerable.Range(0, $2)) {");
 
-        // ── 5. Write → Console.WriteLine ─ـ
-        cs = Regex.Replace(cs, @"Write\(", "Console.WriteLine(");
+        // ── 4. while (cond) { ─ـ
+        spCode = Regex.Replace(spCode, @"while\s*\((.+)\)\s*\{", @"while ($1) {");
 
-        // ── 6. elif → else if ─ـ
-        cs = Regex.Replace(cs, @"\belif\b", "else if");
+        // ── 5. ++ → += 1 ─ـ
+        spCode = Regex.Replace(spCode, @"(\w+)\+\+", "$1 += 1");
 
-        // ── 7. def → func C# ─ـ
-        cs = Regex.Replace(cs, @"(public\s+|private\s+|static\s+)*def\s+(\w+)\s*\(([^)]*)\)\s*(->\s*(\w+))?\s*\{", match =>
+        // ── 6. def → func C# ─ـ
+        spCode = Regex.Replace(spCode, @"def\s+(\w+)\s*\(([^)]*)\)\s*(->\s*(\w+))?\s*\{", match =>
         {
-            var modifier = match.Groups[1].Value.Trim();
-            var name = match.Groups[2].Value;
-            var args = match.Groups[3].Value.Trim();
-            var returnType = "void";
+            var name = match.Groups[1].Value;
+            var args = match.Groups[2].Value.Trim();
+            var returnType = match.Groups[4].Success ? match.Groups[4].Value : "void";
+            if (returnType == "str") returnType = "string";
+            if (returnType == "Any") returnType = "object";
 
-            if (match.Groups.Count >= 6 && match.Groups[5].Success)
-                returnType = match.Groups[5].Value;
-                if (returnType == "str") {
-                    returnType = "string";
-                }
-                else if (returnType == "Any"){
-                    returnType = "object";
-                }
-            else
-            {
-                var bodyStart = match.Index + match.Length;
-                var bodyEnd = cs.IndexOf('}', bodyStart);
-                if (bodyEnd > bodyStart)
-                {
-                    var body = cs.Substring(bodyStart, bodyEnd - bodyStart);
-                    if (Regex.IsMatch(body, @"\breturn\b"))
-                        returnType = "object";
-                }
-            }
-
-            if (string.IsNullOrEmpty(modifier))
-                modifier = "static";
-
+            var converted = new List<string>();
             if (!string.IsNullOrEmpty(args))
             {
-                var parts = args.Split(',');
-                var converted = new List<string>();
-                foreach (var part in parts)
+                foreach (var part in args.Split(','))
                 {
-                    var trimmed = part.Trim();
-                    if (trimmed.Contains(':'))
+                    var p = part.Trim();
+                    if (p.Contains(':'))
                     {
-                        var split = trimmed.Split(':');
-                        var NameType = split[1].Trim();
-                        var NameVar = split[0].Trim();
-                        if (NameType == "str") {
-                            NameType = "string";
-                        }
-                        else if (NameType == "Any"){
-                            NameType = "object";
-                        }
-                        converted.Add($"{NameType} {NameVar}");
+                        var s = p.Split(':');
+                        var t = s[1].Trim();
+                        if (t == "str") t = "string";
+                        if (t == "Any") t = "object";
+                        converted.Add($"{t} {s[0].Trim()}");
                     }
-                    else
-                    {
-                        converted.Add($"object {trimmed}");
-                    }
+                    else converted.Add($"object {p}");
                 }
-                args = string.Join(", ", converted);
             }
-
-            return $"{modifier} {returnType} {name}({args}) {{";
+            return $"static {returnType} {name}({string.Join(", ", converted)}) {{";
         });
 
-        // Any → object
-        cs = Regex.Replace(cs, @"\bAny\b", "object");
+        spCode = Regex.Replace(spCode, @"Write\(", "Console.WriteLine(");
 
-        return cs;
+        // ── ۷. Sprache Parse Line ─ـ
+        var results = new List<string>();
+        foreach (var line in spCode.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (string.IsNullOrEmpty(trimmed))
+            {
+                results.Add("");
+                continue;
+            }
+
+            try
+            {
+                var result = SharpThonParser.Line.Parse(trimmed);
+                results.Add(result);
+            }
+            catch (Sprache.ParseException)
+            {
+                results.Add(trimmed);
+            }
+        }
+
+        var finalLines = new List<string>();
+        foreach (var line in results)
+        {
+            var trimmed = line.Trim();
+            if (string.IsNullOrEmpty(trimmed) || trimmed.EndsWith(';') || trimmed.EndsWith('{') || trimmed.EndsWith('}'))
+                finalLines.Add(line);
+            else
+                finalLines.Add(line + ";");
+        }
+        return string.Join("\n", finalLines);
     }
 }
