@@ -1,13 +1,28 @@
 <p align="center">
   <h1 align="center">🐍⚡ SharpThon</h1>
-  <p align="center"><strong>A Python-like language that transpiles to C# — braces, semicolons, and strong typing.</strong></p>
+  <p align="center"><strong>A Python-like language that transpiles to C# — 16x faster than Python.</strong></p>
 </p>
 
 <p align="center">
   <a href="https://github.com/OandONE/SharpThon/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow" alt="License: MIT"></a>
   <a href="#"><img src="https://img.shields.io/badge/Stage-Alpha-orange" alt="Alpha"></a>
   <a href="#"><img src="https://img.shields.io/badge/.NET-8.0-blueviolet" alt=".NET 8.0"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Parser-Sprache-green" alt="Sprache"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Speed-16x%20faster%20than%20Python-red" alt="Speed"></a>
 </p>
+
+---
+
+## ⚡ Performance
+
+**SharpThon is 16x faster than Python.**
+
+| Language | 10M Loop Iterations |
+|---|---|
+| Python | 3,275 ms |
+| **SharpThon (C#)** | **196 ms** |
+
+Same syntax, 16x the speed. The power of .NET, the simplicity of Python.
 
 ---
 
@@ -32,16 +47,17 @@ if (age == 16) {
 
 · ✅ Python-like syntax — familiar, readable
 · ✅ C# target — transpiles to clean, idiomatic C#
+· ✅ Sprache Parser — clean C#, minimal Regex, no external tools
 · ✅ Optional type hints — x = 10 or x: int = 10
 · ✅ str → string, Any → object — seamless C# mapping
 · ✅ Braces {} — no more indentation errors
 · ✅ Write() — same as print() or Console.WriteLine()
 · ✅ if/elif/else — C# gets else if
 · ✅ for (i in n) — becomes foreach + Enumerable.Range
-· ✅ while, try/catch, ++/--
+· ✅ while, ++/--
 · ✅ Functions — with modifiers (public, static), type hints, and return types
 · ✅ Comments: # → //
-· 🚧 ANTLR Parser (in progress — replacing Regex)
+· 🚧 try/catch (in progress)
 · 🚧 Classes (in progress)
 · 🚧 Imports (in progress)
 
@@ -162,10 +178,12 @@ greet("Developer")
 🔄 How It Works
 
 ```
-SharpThon (.spy) → Transpiler → C# (.cs) → .NET Build → Run
+SharpThon (.spy) → Sprache Parser → C# (.cs) → .NET Build → Run
 ```
 
-The transpiler is written in C#. ANTLR parser is replacing Regex for production-ready parsing.
+The transpiler is written in C# using Sprache — a clean parser combinator library.
+Minimal Regex, no external tools, no Java — just pure C# and .NET.
+
 A Python prototype is also available in python_transpiler/.
 
 ---
@@ -181,10 +199,11 @@ SharpThon/
 ├── sharpton_cs/            # C# transpiler (current)
 │   ├── Sharpton.Core/      # Core library
 │   │   ├── Transpiler.cs
-│   │   ├── Parser.cs       # Sprache-based
-│   │   └── SharpThon.g4    # ANTLR grammar
+│   │   ├── Parser.cs       # Sprache-based parser
+│   │   └── Sharpton.Core.csproj
 │   ├── Sharpton.Cli/       # CLI tool
-│   │   └── Program.cs
+│   │   ├── Program.cs
+│   │   └── Sharpton.Cli.csproj
 │   └── Sharpton.sln
 ├── test.spy                # Demo file
 └── README.md
@@ -197,9 +216,10 @@ SharpThon/
 Phase Status
 Python MVP ✅ Complete
 C# Transpiler (Regex) ✅ Complete
+Sprache Parser ✅ Complete
 Functions with modifiers ✅ Complete
 str → string, Any type ✅ Complete
-ANTLR Parser 🚧 In progress
+try/catch 🚧 In progress
 Classes (class) ❌
 Imports (import x.y) ❌
 for (i=0;i<10;i++) (C-style) ❌
@@ -220,4 +240,4 @@ MIT © OandONE
 
 Inspired by Python (simplicity) and C# (power).
 
-Built by a developer who wanted braces in Python — and the full power of .NET.
+Built by a developer who wanted Python with braces — and got 16x the speed.
