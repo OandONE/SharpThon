@@ -113,10 +113,34 @@ public static class SharpThonParser
         from name in Identifier
         from plus in Parse.String("++").Token()
         select $"{name} += 1;";
+    
+    // ── Try ─ـ
+    public static readonly Parser<string> TryStatement = 
+        from tryKw in Parse.String("try").Token()
+        select "try {";
+
+    // ── Catch (with "except" alias) ─ـ
+    public static readonly Parser<string> CatchStatement = 
+        from catchKw in Parse.String("catch").Or(Parse.String("except")).Token()
+        from openP in Parse.Char('(').Token()
+        from exceptionType in Identifier
+        from asKw in Parse.String("as").Token().Optional()
+        from varName in Identifier.Optional()
+        from closeP in Parse.Char(')').Token()
+        select varName.IsDefined 
+            ? $"catch ({exceptionType} {varName.Get()}) {{" 
+            : $"catch ({exceptionType}) {{";
+
+    // ── Finally ─ـ
+    public static readonly Parser<string> FinallyStatement = 
+        from finallyKw in Parse.String("finally").Token()
+        select "finally {";
 
     // ── Line ─ـ
     public static readonly Parser<string> Line = 
-        WriteCall.Or(VariableDecl).Or(FunctionDecl).Or(IfStatement).Or(ElifStatement).Or(ElseStatement).Or(CloseBrace).Or(ForLoop).Or(WhileLoop).Or(Increment);
+        WriteCall.Or(VariableDecl).Or(FunctionDecl).Or(IfStatement).Or(ElifStatement)
+        .Or(ElseStatement).Or(CloseBrace).Or(ForLoop).Or(WhileLoop).Or(Increment)
+        .Or(TryStatement).Or(CatchStatement).Or(FinallyStatement);
 
     // ── Program ─ـ
     public static readonly Parser<string> Program = 
