@@ -1,0 +1,5 @@
+import circular_b
+
+def run() {
+    Write("Circular A")
+}

@@ -1,0 +1,17 @@
+def run() {
+    Write("[Types]")
+
+    a: int = 10
+    b: str = "hello"
+    c: bool = true
+    d: float = 3.14
+    e: object = "anything"
+    f: Any = "anything"
+
+    Write(a)
+    Write(b)
+    Write(c)
+    Write(d)
+    Write(e)
+    Write(f)
+}

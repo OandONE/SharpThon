@@ -1,0 +1,27 @@
+# .NET
+**/bin/
+**/obj/
+**/__sharpthon__/
+*.user
+*.suo
+*.userprefs
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Node (اکستنشن)
+vscode-extension/node_modules/
+vscode-extension/out/
+
+# Temporary
+*.tmp
+/tmp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test Temps
+_*.spy
+my_package/

@@ -1,0 +1,21 @@
+def run() {
+    Write("[Control Flow]")
+
+    x = 10
+
+    if (x > 5) {
+        Write("if passed")
+
+        if (x < 20) {
+            Write("nested if passed")
+        }
+    }
+
+    i = 0
+
+    while (i < 3) {
+        Write(i)
+        i = i + 1
+    }
+
+}

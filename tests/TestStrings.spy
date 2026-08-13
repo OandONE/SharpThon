@@ -1,0 +1,12 @@
+def run() {
+    Write("[Strings]")
+
+    name = "Ali"
+    age = 16
+
+    Write(name)
+    Write(f"Name: {name}")
+    Write(f"Age: {age}")
+    Write(f"{name} is {age} years old")
+
+}

@@ -1,0 +1,12 @@
+def run() {
+    name = "Ali"
+    age = 16
+
+    Write(name)
+
+    x = unknownVariable
+
+    Write("Done")
+}
+
+run()

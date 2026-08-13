@@ -1,0 +1,32 @@
+import TestVariables
+import TestTypes
+import TestFunctions
+import TestControlFlow
+import TestStrings
+import TestImports
+import CStyleForLoop
+import TestProperties
+
+def main() {
+    Write("================================")
+    Write("      SharpThon Test Suite")
+    Write("================================")
+
+    TestVariables.run()
+    TestTypes.run()
+    TestFunctions.run()
+    TestControlFlow.run()
+    TestStrings.run()
+    TestImports.run()
+    CStyleForLoop.run()
+    TestProperties.run()
+
+    Write("================================")
+    Write("        ALL TESTS PASSED")
+    Write("================================")
+
+}
+
+main()
+
+

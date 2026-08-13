@@ -1,0 +1,10 @@
+def run() {
+    Write("[Go]")
+
+    go {
+        x = 10
+        y = 20
+        result = x + y
+        Write(result)
+    }
+}

@@ -1,0 +1,13 @@
+import TestImportModule
+
+def run() {
+    Write("[Imports]")
+
+    result = TestImportModule.add(10, 20)
+    result2 = TestImportModule.multiply(5, 5)
+    text = TestImportModule.message()
+
+    Write(result)
+    Write(result2)
+    Write(text)
+}

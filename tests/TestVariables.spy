@@ -1,0 +1,9 @@
+def run() {
+Write("[Variables]")
+
+x = 10
+y = 20
+result = x + y
+
+Write(result)
+}

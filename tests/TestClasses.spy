@@ -1,0 +1,13 @@
+class Person {
+    name = "Ali"
+
+    def greet() {
+        Write(f"Hello {name}")
+    }
+}
+
+def run() {
+    Write("[Classes]")
+
+    person = Person()
+}

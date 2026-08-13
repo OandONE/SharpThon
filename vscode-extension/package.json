@@ -1,0 +1,53 @@
+{
+  "name": "sharpthon-vscode",
+  "displayName": "SharpThon",
+  "description": "Language support for SharpThon (.spy) files.",
+  "version": "0.1.0",
+  "publisher": "sharpthon",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:sharpthon"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "sharpthon",
+        "aliases": ["SharpThon", "sharpthon"],
+        "extensions": [".spy"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "configuration": {
+      "title": "SharpThon",
+      "properties": {
+        "sharpthon.server.path": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to a built SharpThon.LSP DLL or executable. When empty, the extension runs the server project with dotnet run."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

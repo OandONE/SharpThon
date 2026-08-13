@@ -1,0 +1,37 @@
+def run() {
+    Write("[Properties]")
+
+    settings = UserSettings()
+    settings.Age = 42
+    Write(settings.Name)
+    Write(UserSettings.Config)
+}
+
+class UserSettings {
+    private name: str = "Ali"
+    private age: int = 0
+    private _password: str = ""
+
+    Name -> str {
+        return name
+    }
+
+    public Age -> int {
+        get {
+            return age
+        }
+        set (value) {
+            age = value
+        }
+    }
+
+    protected Password -> str {
+        set (value) {
+            _password = value
+        }
+    }
+
+    static Config -> str {
+        return "default"
+    }
+}

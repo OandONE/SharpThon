@@ -1,0 +1,18 @@
+def add(x: int, y: int) -> int {
+return x + y
+}
+
+def get_message() {
+return "SharpThon"
+}
+
+def run() {
+Write("[Functions]")
+
+result = add(10, 20)
+message = get_message()
+
+Write(result)
+Write(message)
+
+}
