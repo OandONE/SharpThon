@@ -5,99 +5,83 @@ namespace Sharpton.Core;
 
 public static class SharpThonParser
 {
-    private static string BuildListLiteral(string content)
+    private static string BuildDictionaryExpression(IEnumerable<string> entries)
     {
-        // Empty list
-        if (string.IsNullOrWhiteSpace(content))
-            return "new List<object>()";
-
-        var items = content
-            .Split(',')
+        var pairs = entries
             .Select(x => x.Trim())
             .Where(x => x.Length > 0)
-            .ToArray();
+            .Select(ParseDictionaryEntry)
+            .ToList();
 
-        if (items.Length == 0)
-            return "new List<object>()";
+        if (pairs.Count == 0)
+            return "new Dictionary<object, object>()";
 
-        string elementType = InferListElementType(items);
+        var keyTypes = pairs.Select(x => InferDictionaryValueType(x.Key)).Distinct().ToList();
+        var valueTypes = pairs.Select(x => InferDictionaryValueType(x.Value)).Distinct().ToList();
 
-        return $"new List<{elementType}> {{ {string.Join(", ", items)} }}";
+        var keyType = keyTypes.Count == 1 ? keyTypes[0] : "object";
+        var valueType = valueTypes.Count == 1 ? valueTypes[0] : "object";
+
+        return $"new Dictionary<{keyType}, {valueType}> {{ {string.Join(", ", pairs.Select(x => $"[{x.Key}] = {x.Value}"))} }}";
     }
 
-    private static string InferListElementType(string[] items)
+    private static (string Key, string Value) ParseDictionaryEntry(string entry)
     {
-        bool allInt = items.All(
-            x => int.TryParse(x, out _)
-        );
+        var depth = 0;
+        var inString = false;
+        var escaped = false;
 
-        if (allInt)
-            return "int";
+        for (var i = 0; i < entry.Length; i++)
+        {
+            var c = entry[i];
+            if (c == '"' && !escaped)
+                inString = !inString;
 
-        bool allDouble = items.All(
-            x => double.TryParse(
-                x,
-                System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out _
-            )
-        );
+            if (!inString)
+            {
+                if (c == '(' || c == '[' || c == '{') depth++;
+                else if (c == ')' || c == ']' || c == '}') depth--;
+                else if (c == ':' && depth == 0)
+                    return (entry[..i].Trim(), entry[(i + 1)..].Trim());
+            }
 
-        if (allDouble)
-            return "double";
+            escaped = c == '\\' && !escaped;
+            if (c != '\\') escaped = false;
+        }
 
-        bool allBool = items.All(
-            x =>
-                x == "true" ||
-                x == "false"
-        );
+        throw new FormatException($"Invalid dictionary entry: {entry}");
+    }
 
-        if (allBool)
-            return "bool";
+    private static string InferDictionaryValueType(string value)
+    {
+        value = value.Trim();
 
-        bool allString = items.All(
-            x =>
-                x.Length >= 2 &&
-                x.StartsWith("\"") &&
-                x.EndsWith("\"")
-        );
-
-        if (allString)
+        if (value.StartsWith("\"") && value.EndsWith("\""))
             return "string";
 
-        // Mixed / unknown expressions.
+        if (value == "true" || value == "false")
+            return "bool";
+
+        if (Regex.IsMatch(value, @"^-?\d+$"))
+            return "int";
+
+        if (Regex.IsMatch(value, @"^-?\d+\.\d+[fF]?$"))
+            return value.EndsWith("f", StringComparison.OrdinalIgnoreCase) ? "float" : "double";
+
         return "object";
     }
 
-    private static string GetVariableCSharpType(
-        IOption<string> type)
-    {
-        if (!type.IsDefined)
-            return "var";
-
-        var value = type.Get();
-
-        if (value.StartsWith("list["))
-        {
-            var elementType = value[5..^1];
-
-            elementType = elementType switch
-            {
-                "str" => "string",
-                "Any" => "object",
-                _ => elementType
-            };
-
-            return $"List<{elementType}>";
-        }
-
-        return value switch
-        {
-            "str" => "string",
-            "Any" => "object",
-            _ => value
-        };
-    }
+    // Dictionary literal: {"ali": 16, "mamad": 20}
+    public static readonly Parser<string> DictionaryLiteral =
+        from open in Parse.Char('{').Token()
+        from entries in (
+            Parse.CharExcept("},\n\r")
+                .AtLeastOnce()
+                .Text()
+                .Select(x => x.Trim())
+        ).DelimitedBy(Parse.Char(',').Token()).Optional()
+        from close in Parse.Char('}').Token()
+        select BuildDictionaryExpression(entries.GetOrElse(new List<string>()));
 
     // Base Tokens
     public static readonly Parser<string> Identifier =
@@ -141,102 +125,6 @@ public static class SharpThonParser
                     : type)} " +
             $"{name};";
 
-    // Constructor-shaped values are parsed separately from generic values.
-    // Whether the name is actually a class is resolved by Transpiler using
-    // the classes declared in the current source file.
-    public static readonly Parser<string> ConstructorCall =
-        from typeName in Identifier
-        from openParen in Parse.Char('(').Token()
-        from arguments in Parse.CharExcept(")\n\r").Many().Text()
-        from closeParen in Parse.Char(')').Token()
-        select typeName + "(" + arguments + ")";
-
-    // List
-    // List literal:
-    // [1, 2, 3]
-    // ["Ali", "Mamad"]
-    // [true, false]
-    public static readonly Parser<string> ListLiteral =
-        from open in Parse.Char('[').Token()
-        from items in (
-            Parse.CharExcept(",]\n\r")
-                .AtLeastOnce()
-                .Text()
-                .Select(x => x.Trim())
-        )
-        .DelimitedBy(Parse.Char(',').Token())
-        .Optional()
-        from close in Parse.Char(']').Token()
-        select BuildListExpression(
-            items.GetOrElse(new List<string>())
-        );
-
-    private static string BuildListExpression(
-        IEnumerable<string> items)
-    {
-        var values = items.ToList();
-
-        if (values.Count == 0)
-            return "new List<object>()";
-
-        var elementType = InferListElementType(values);
-
-        return
-            $"new List<{elementType}> " +
-            $"{{ {string.Join(", ", values)} }}";
-    }
-
-    private static string InferListElementType(
-        List<string> values)
-    {
-        var types = values
-            .Select(InferListValueType)
-            .Distinct()
-            .ToList();
-
-        if (types.Count == 1)
-            return types[0];
-
-        return "object";
-    }
-
-    private static string InferListValueType(
-        string value)
-    {
-        value = value.Trim();
-
-        if (
-            value.StartsWith("\"") &&
-            value.EndsWith("\"")
-        )
-            return "string";
-
-        if (
-            value == "true" ||
-            value == "false"
-        )
-            return "bool";
-
-        if (Regex.IsMatch(
-            value,
-            @"^-?\d+$"
-        ))
-            return "int";
-
-        if (Regex.IsMatch(
-            value,
-            @"^-?\d+\.\d+[fF]?$"
-        ))
-        {
-            if (value.EndsWith("f", StringComparison.OrdinalIgnoreCase))
-                return "float";
-
-            return "double";
-        }
-
-        return "object";
-    }
-
     // Variables: x = 10 Or x: int = 10
     public static readonly Parser<string> VariableDecl =
         from modifier in
@@ -249,102 +137,36 @@ public static class SharpThonParser
         ).Optional()
 
         from name in Identifier
-
         from type in (
             from colon in Parse.Char(':').Token()
-
-            from t in
-                (
-                    from listKw in Parse.String("list").Token()
-                    from openBracket in Parse.Char('[').Token()
-
-                    from elementType in
-                        Parse.String("int")
-                            .Or(Parse.String("str"))
-                            .Or(Parse.String("bool"))
-                            .Or(Parse.String("float"))
-                            .Or(Parse.String("long"))
-                            .Or(Parse.String("double"))
-                            .Or(Parse.String("object"))
-                            .Or(Parse.String("Any"))
-                            .Text()
-                            .Token()
-
-                    from closeBracket in Parse.Char(']').Token()
-
-                    select $"list[{elementType}]"
-                )
-                .Or(
-                    Parse.String("int")
-                        .Or(Parse.String("str"))
-                        .Or(Parse.String("bool"))
-                        .Or(Parse.String("float"))
-                        .Or(Parse.String("long"))
-                        .Or(Parse.String("double"))
-                        .Or(Parse.String("object"))
-                        .Or(Parse.String("Any"))
-                        .Text()
-                        .Token()
-                )
-
+            from t in Parse.String("int")
+                .Or(Parse.String("str"))
+                .Or(Parse.String("bool"))
+                .Or(Parse.String("float"))
+                .Or(Parse.String("long"))
+                .Or(Parse.String("double"))
+                .Or(Parse.String("object"))
+                .Or(Parse.String("Any"))
+                .Text()
+                .Token()
             select t
         ).Optional()
-
         from eq in Parse.Char('=').Token()
-
         from value in
-            ListLiteral
-                .Or(ConstructorCall)
+            DictionaryLiteral
                 .Or(Parse.CharExcept(";\n\r").AtLeastOnce().Text())
-
         from semicolon in Parse.Char(';').Optional()
 
         select
-            $"{(modifier.IsDefined
-                ? modifier.Get() + " "
-                : "")}" +
-            $"{GetVariableCSharpType(type)} " +
+            $"{(modifier.IsDefined ? modifier.Get() + " " : "")}" +
+            $"{(type.IsDefined
+                ? (type.Get() == "str"
+                    ? "string"
+                    : type.Get() == "Any"
+                        ? "object"
+                        : type.Get())
+                : "var")} " +
             $"{name} = {value.Trim()};";
-
-    // Properties: [public|private|protected] [static] Name -> Type {
-    public static readonly Parser<string> PropertyDecl =
-        from access in Parse.String("public")
-            .Or(Parse.String("private"))
-            .Or(Parse.String("protected"))
-            .Text()
-            .Token()
-            .Optional()
-        from staticKw in Parse.String("static").Token().Optional()
-        from name in Identifier
-        from arrow in Parse.String("->").Token()
-        from type in Parse.String("int")
-            .Or(Parse.String("str"))
-            .Or(Parse.String("bool"))
-            .Or(Parse.String("float"))
-            .Or(Parse.String("double"))
-            .Or(Parse.String("long"))
-            .Or(Parse.String("object"))
-            .Or(Parse.String("Any"))
-            .Text()
-            .Token()
-        select $"{(access.IsDefined ? access.Get() : "public")} " +
-            $"{(staticKw.IsDefined ? "static " : "")}" +
-            $"{(type == "str" ? "string" : type == "Any" ? "object" : type)} " +
-            $"{name} {{";
-
-    // Property accessors
-    public static readonly Parser<string> GetAccessor =
-        from getKw in Parse.String("get").Token()
-        from openBrace in Parse.Char('{').Token()
-        select "get {";
-
-    public static readonly Parser<string> SetAccessor =
-        from setKw in Parse.String("set").Token()
-        from openParen in Parse.Char('(').Token()
-        from value in Parse.String("value").Token()
-        from closeParen in Parse.Char(')').Token()
-        from openBrace in Parse.Char('{').Token()
-        select "set {";
 
     // If
     public static readonly Parser<string> IfStatement = 
@@ -372,21 +194,7 @@ public static class SharpThonParser
         from brace in Parse.Char('}').Token()
         select "}";
 
-    // C-style For Loop: for (i = 0; i < 10; i++)
-    public static readonly Parser<string> CStyleForLoop =
-        from forKw in Parse.String("for").Token()
-        from openP in Parse.Char('(').Token()
-        from varName in Identifier
-        from equalsSign in Parse.Char('=').Token()
-        from initialValue in Parse.CharExcept(";\n\r").AtLeastOnce().Text()
-        from firstSemicolon in Parse.Char(';').Token()
-        from condition in Parse.CharExcept(";\n\r").AtLeastOnce().Text()
-        from secondSemicolon in Parse.Char(';').Token()
-        from increment in Parse.CharExcept(")\n\r").AtLeastOnce().Text()
-        from closeP in Parse.Char(')').Token()
-        select $"for (int {varName} = {initialValue.Trim()}; {condition.Trim()}; {increment.Trim()}) {{";
-
-    // Range-based For Loop
+    // For Loop
     public static readonly Parser<string> ForLoop = 
         from forKw in Parse.String("for").Token()
         from openP in Parse.Char('(').Token()
@@ -446,11 +254,7 @@ public static class SharpThonParser
                             ? "object"
                             : type.Get()
                 )} {param}"
-                // Untyped parameters must support SharpThon operators at
-                // runtime (for example x + y and x * y). Using object makes
-                // those expressions invalid C#, while dynamic preserves the
-                // language's untyped behavior.
-                : $"dynamic {param}"
+                : $"object {param}"
 
         ).DelimitedBy(Parse.Char(',').Token()).Optional()
 
@@ -571,18 +375,11 @@ public static class SharpThonParser
         from value in Parse.CharExcept("\n\r").Many().Text()
         select $"return {value.Trim()};";
 
-    // Class And Support Interfaces
+    // Class
     public static readonly Parser<string> ClassDecl =
-        from cls in Parse.String("class").Token()
-        from name in Identifier
-        from inheritance in (
-            from colon in Parse.Char(':').Token()
-            from baseClass in Identifier
-            select baseClass
-        ).Optional()
-        select inheritance.IsDefined
-            ? $"class {name} : {inheritance.Get()} {{"
-            : $"class {name} {{";
+    from cls in Parse.String("class").Token()
+    from name in Identifier
+    select $"class {name} {{";
 
     // Go - fire and forget
     public static readonly Parser<string> GoStatement =
@@ -606,11 +403,6 @@ public static class SharpThonParser
             .Or(GoStatement)
             .Or(ReturnStatement)
             .Or(WriteCall)
-            .Or(PropertyDecl)
-            .Or(GetAccessor)
-            .Or(SetAccessor)
-            .Or(ClassDecl)
-            .Or(ListLiteral)
             .Or(VariableDecl)
             .Or(FunctionDecl)
             .Or(IfStatement)
@@ -621,7 +413,6 @@ public static class SharpThonParser
             .Or(CloseAndCatch)
             .Or(CatchStatement)
             .Or(FinallyStatement)
-            .Or(CStyleForLoop)
             .Or(ForLoop)
             .Or(WhileLoop)
             .Or(Increment)
