@@ -79,8 +79,6 @@ if (age == 16) {
 * ✅ Async tasks — `go {...}` and `await go {...}` with block support (sync + async)
 * ✅ CI/CD — GitHub Actions for build and test
 * ✅ Inheritance — class `:` parent syntax
-* ✅ Lists — array literal syntax `[1, 2, 3]`
-* ✅ Dictionaries — Python-style `{"key": value}` syntax
 
 ---
 
@@ -577,28 +575,6 @@ for (i = 0; i < 5; i++) {
 for (int i = 0; i < 5; i++) {
     Console.WriteLine(i);
 }
-```
-
-### Lists
-
-```spy
-numbers = [1, 2, 3]
-names = ["Ali", "Reza"]
-mixed = [1, "two", true]
-```
-
-### Dictionaries
-
-```spy
-scores = {"Ali": 90, "Reza": 85}
-config = {"host": "localhost", "port": 8080}
-```
-
-Access values:
-
-```spy
-Write(scores["Ali"])
-config["port"] = 9090
 ```
 
 ### CI/CD

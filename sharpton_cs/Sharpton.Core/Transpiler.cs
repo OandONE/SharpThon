@@ -3,17 +3,53 @@ using Sprache;
 
 namespace Sharpton.Core;
 
-public class Transpiler
+public sealed class SharpThonImportException : Exception
 {
-    private sealed class VariableSymbol
+    public SharpThonImportException(
+        string sourceFile,
+        int lineNumber,
+        string moduleFileName)
+        : base($"Imported module '{moduleFileName}' not found.")
     {
-        public string Name { get; init; } = "";
-        public string Kind { get; set; } = "variable";
-        public string? Type { get; set; }
-        public string? KeyType { get; set; }
-        public string? ValueType { get; set; }
+        SourceFile = sourceFile;
+        LineNumber = lineNumber;
     }
 
+    public SharpThonImportException(
+        string sourceFile,
+        int lineNumber,
+        string packageName,
+        bool isPackage)
+        : base($"Package '{packageName}' does not have an index.spy file")
+    {
+        SourceFile = sourceFile;
+        LineNumber = lineNumber;
+    }
+
+    public string SourceFile { get; }
+    public int LineNumber { get; }
+}
+
+public sealed class SharpThonCircularImportException : Exception
+{
+    public SharpThonCircularImportException(
+        string sourceFile,
+        int lineNumber,
+        IReadOnlyList<string> cycle)
+        : base("Circular import detected.")
+    {
+        SourceFile = sourceFile;
+        LineNumber = lineNumber;
+        Cycle = cycle;
+    }
+
+    public string SourceFile { get; }
+    public int LineNumber { get; }
+    public IReadOnlyList<string> Cycle { get; }
+}
+
+public class Transpiler
+{
     private string? currentClass;
     private string? sourceDirectory;
 
@@ -24,20 +60,26 @@ public class Transpiler
     // Keeps track of modules currently being expanded.
     private readonly HashSet<string> modulesInProgress = new();
 
+    // Ordered DFS path for the modules currently being expanded. A HashSet
+    // can detect a back edge, while this list lets us report the full cycle.
+    private readonly List<string> importPath = new();
+
     public string TranspileFile(string filepath)
     {
         sourceDirectory = Path.GetDirectoryName(
             Path.GetFullPath(filepath)
         )!;
 
-        visitedModules.Clear();
-        modulesInProgress.Clear();
-        currentClass = null;
+        InitializeImportTracking(filepath);
 
         var spCode = File.ReadAllText(filepath);
 
         var (processedCode, moduleBodies) =
-            ProcessImports(spCode, allowUsingStatements: true);
+            ProcessImports(
+                spCode,
+                allowUsingStatements: true,
+                sourceFile: filepath
+            );
 
         var mainCode = Transpile(processedCode);
 
@@ -56,14 +98,16 @@ public class Transpiler
             Path.GetFullPath(filepath)
         )!;
 
-        visitedModules.Clear();
-        modulesInProgress.Clear();
-        currentClass = null;
+        InitializeImportTracking(filepath);
 
         var spCode = File.ReadAllText(filepath);
 
         var (processedCode, moduleBodies) =
-            ProcessImports(spCode, allowUsingStatements: true);
+            ProcessImports(
+                spCode,
+                allowUsingStatements: true,
+                sourceFile: filepath
+            );
 
         var result = TranspileWithMapping(processedCode);
 
@@ -81,10 +125,25 @@ public class Transpiler
 
     // IMPORTS
 
+    private void InitializeImportTracking(string filepath)
+    {
+        visitedModules.Clear();
+        modulesInProgress.Clear();
+        importPath.Clear();
+        currentClass = null;
+
+        // The entry file must be part of the DFS path as well. Otherwise
+        // a.spy -> b.spy -> a.spy would not be detected until too late.
+        var rootPath = Path.GetFullPath(filepath);
+        modulesInProgress.Add(rootPath);
+        importPath.Add(rootPath);
+    }
+
     private (string processedCode, List<string> moduleBodies)
         ProcessImports(
             string spCode,
-            bool allowUsingStatements)
+            bool allowUsingStatements,
+            string sourceFile)
     {
         var moduleBodies = new List<string>();
         var moduleMap = new Dictionary<string, string>();
@@ -93,48 +152,104 @@ public class Transpiler
         {
             var moduleName = match.Groups[1].Value;
 
-            var modulePath = Path.Combine(
-                sourceDirectory!,
-                moduleName + ".spy"
+            var moduleParts = moduleName.Split('.');
+            var packagePath = Path.GetFullPath(
+                Path.Combine(sourceDirectory!, Path.Combine(moduleParts))
             );
 
-            if (!File.Exists(modulePath))
-                continue;
+            string modulePath;
+
+            // A directory import resolves to its index.spy file. Prefer this
+            // form when a directory and a similarly named .spy file coexist.
+            if (Directory.Exists(packagePath))
+            {
+                modulePath = Path.Combine(packagePath, "index.spy");
+
+                if (!File.Exists(modulePath))
+                {
+                    var missingPackageLineNumber =
+                        spCode[..match.Index].Count(c => c == '\n') + 1;
+
+                    throw new SharpThonImportException(
+                        sourceFile,
+                        missingPackageLineNumber,
+                        moduleName,
+                        isPackage: true
+                    );
+                }
+            }
+            else
+            {
+                modulePath = Path.GetFullPath(
+                    Path.Combine(
+                        sourceDirectory!,
+                        Path.Combine(moduleParts) + ".spy"
+                    )
+                );
+
+                if (!File.Exists(modulePath))
+                {
+                    var missingModuleLineNumber =
+                        spCode[..match.Index].Count(c => c == '\n') + 1;
+
+                    throw new SharpThonImportException(
+                        sourceFile,
+                        missingModuleLineNumber,
+                        moduleName + ".spy"
+                    );
+                }
+            }
 
             var className = ToPascalCase(moduleName);
 
             moduleMap[moduleName] = className;
 
-            /*
-             * Circular import protection.
-             *
-             * Example:
-             *
-             * test1 -> test2
-             * test2 -> test1
-             *
-             * When test2 tries to import test1 again,
-             * test1 has already been visited, so we do not
-             * generate Test1 for a second time.
-             */
-            if (visitedModules.Contains(modulePath))
-                continue;
+            var lineNumber =
+                spCode[..match.Index].Count(c => c == '\n') + 1;
 
+            // A module already on the active DFS path is a back edge and
+            // therefore a circular import. Check this before visitedModules:
+            // visited modules are valid shared dependencies, active ones are
+            // not.
             if (modulesInProgress.Contains(modulePath))
+            {
+                var cycleStart = importPath.IndexOf(modulePath);
+                var cycle = importPath
+                    .Skip(cycleStart)
+                    .Append(modulePath)
+                    .Select(path => Path.GetFileName(path)!)
+                    .ToList();
+
+                throw new SharpThonCircularImportException(
+                    sourceFile,
+                    lineNumber,
+                    cycle
+                );
+            }
+
+            // This module was completely expanded through another branch.
+            if (visitedModules.Contains(modulePath))
                 continue;
 
             visitedModules.Add(modulePath);
             modulesInProgress.Add(modulePath);
+            importPath.Add(modulePath);
 
-            var body = TranspileModule(
-                modulePath,
-                className
-            );
+            try
+            {
+                var body = TranspileModule(
+                    modulePath,
+                    className
+                );
 
-            modulesInProgress.Remove(modulePath);
-
-            if (!string.IsNullOrWhiteSpace(body))
-                moduleBodies.Add(body);
+                if (!string.IsNullOrWhiteSpace(body))
+                    moduleBodies.Add(body);
+            }
+            finally
+            {
+                importPath.RemoveAt(importPath.Count - 1);
+                modulesInProgress.Remove(modulePath);
+            }
         }
 
         var lines = spCode.Split('\n');
@@ -215,7 +330,8 @@ public class Transpiler
         var (processedCode, nestedModules) =
             ProcessImports(
                 spCode,
-                allowUsingStatements: false
+                allowUsingStatements: false,
+                sourceFile: modulePath
             );
 
         /*
@@ -277,6 +393,7 @@ public class Transpiler
     {
         return string.Concat(
             snakeCase
+                .Replace('.', '_')
                 .Split('_')
                 .Select(part =>
                     part.Length > 0
@@ -287,7 +404,7 @@ public class Transpiler
 
     private static readonly Regex ModuleImportRegex =
         new(
-            @"^import\s+([A-Za-z_][A-Za-z0-9_]*)$",
+            @"^import\s+([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)$",
             RegexOptions.Multiline
         );
 
@@ -312,70 +429,437 @@ public class Transpiler
 
     // CORE TRANSPILATION + SYMBOL TABLE
 
-    private (string Code, List<int> SourceLineNumbers)
-        TranspileCore(string spCode)
+    private (string Code, List<int> SourceLineNumbers) TranspileCore(string spCode)
     {
         spCode = PrepareSource(spCode);
         spCode = FixFloatLiterals(spCode);
+
+        // Class declarations may appear after their use, so collect them
+        // before transpiling individual lines.
+        var declaredClasses = GetDeclaredClasses(spCode);
 
         var results = new List<string>();
         var sourceLineNumbers = new List<int>();
         var sourceLines = spCode.Split('\n');
 
-        // Analyze dictionary declarations and later index assignments before emitting C#.
-        // This lets a dictionary widen to object when its value types are not stable.
-        var dictionaryTypes = AnalyzeDictionaryTypes(sourceLines);
-
         // SharpThon variable symbol table.
-        // Each block gets its own scope. Lookup walks from the
-        // innermost scope to outer scopes.
-        var variableScopes = new Stack<Dictionary<string, VariableSymbol>>();
-        variableScopes.Push(new Dictionary<string, VariableSymbol>(StringComparer.Ordinal));
+        // Each block gets its own scope.
+        // Lookup walks from the innermost scope to outer scopes.
+        var variableScopes = new Stack<HashSet<string>>();
+        variableScopes.Push(
+            new HashSet<string>(StringComparer.Ordinal)
+        );
 
-        for (int lineNumber = 0;
-             lineNumber < sourceLines.Length;
-             lineNumber++)
+        for (
+            int lineNumber = 0;
+            lineNumber < sourceLines.Length;
+            lineNumber++
+        )
         {
             var line = sourceLines[lineNumber];
-            var (rawCode, comment) = SplitLineComment(line);
-            var code = rawCode.Trim();
+
+            var index = line.IndexOf("//");
+
+            string comment =
+                index >= 0
+                    ? line[index..]
+                    : "";
+
+            string code =
+                index >= 0
+                    ? line[..index]
+                    : line;
+
+            code = code.Trim();
+
+            // ------------------------------------------------------------
+            // Block-style async syntax
+            //
+            // go {
+            //     command
+            // }
+            //
+            // await go {
+            //     command
+            // }
+            //
+            // Old syntax is still handled by the normal parser:
+            //
+            // go command
+            // await go command
+            // ------------------------------------------------------------
+
+            if (
+                code == "go {" ||
+                code == "await go {"
+            )
+            {
+                bool isAwait =
+                    code == "await go {";
+
+                // For normal `go`, run in background.
+                //
+                // For `await go`, we intentionally block until the
+                // Task completes because the current SharpThon
+                // function model is synchronous.
+                //
+                // Later, when async def is supported, this can become:
+                //
+                // await Task.Run(() => {
+                //
+                string wrapper =
+                    isAwait
+                        ? "Task.Run(() => {"
+                        : "Task.Run(() => {";
+
+                results.Add(wrapper);
+                sourceLineNumbers.Add(lineNumber + 1);
+
+                // The go block has its own variable scope.
+                variableScopes.Push(
+                    new HashSet<string>(
+                        StringComparer.Ordinal
+                    )
+                );
+
+                // We already consumed the opening `{`
+                // from `go {`.
+                int blockDepth = 1;
+
+                lineNumber++;
+
+                while (
+                    lineNumber < sourceLines.Length
+                )
+                {
+                    var blockLine =
+                        sourceLines[lineNumber];
+
+                    var blockCommentIndex =
+                        blockLine.IndexOf("//");
+
+                    string blockComment =
+                        blockCommentIndex >= 0
+                            ? blockLine[blockCommentIndex..]
+                            : "";
+
+                    string blockCode =
+                        blockCommentIndex >= 0
+                            ? blockLine[..blockCommentIndex]
+                            : blockLine;
+
+                    blockCode = blockCode.Trim();
+
+                    // ----------------------------------------------------
+                    // Empty line
+                    // ----------------------------------------------------
+
+                    if (string.IsNullOrEmpty(blockCode))
+                    {
+                        results.Add("");
+
+                        sourceLineNumbers.Add(
+                            lineNumber + 1
+                        );
+
+                        lineNumber++;
+                        continue;
+                    }
+
+                    // ----------------------------------------------------
+                    // Count braces BEFORE parsing the line.
+                    // ----------------------------------------------------
+
+                    int opens =
+                        CountBraces(
+                            blockCode,
+                            '{'
+                        );
+
+                    int closes =
+                        CountBraces(
+                            blockCode,
+                            '}'
+                        );
+
+                    // ----------------------------------------------------
+                    // If we are at the outermost level and this line is
+                    // the closing brace of the go block, stop here.
+                    //
+                    // Do NOT send this `}` to the SharpThon parser.
+                    // ----------------------------------------------------
+
+                    if (
+                        blockDepth == 1 &&
+                        blockCode == "}"
+                    )
+                    {
+                        break;
+                    }
+
+                    // ----------------------------------------------------
+                    // Handle variable scopes before parsing.
+                    // ----------------------------------------------------
+
+                    CloseVariableScopes(
+                        variableScopes,
+                        blockCode
+                    );
+
+                    try
+                    {
+                        var innerResult =
+                            SharpThonParser.Line.Parse(
+                                blockCode
+                            );
+
+                        // ------------------------------------------------
+                        // Constructor handling
+                        // ------------------------------------------------
+
+                        if (
+                            currentClass != null &&
+                            innerResult.StartsWith(
+                                $"static void {currentClass}("
+                            )
+                        )
+                        {
+                            innerResult =
+                                innerResult.Replace(
+                                    $"static void {currentClass}(",
+                                    $"public {currentClass}("
+                                );
+                        }
+
+                        // ------------------------------------------------
+                        // Function return type inference
+                        // ------------------------------------------------
+
+                        if (
+                            IsFunctionDeclaration(
+                                blockCode
+                            )
+                        )
+                        {
+                            var inferredType =
+                                InferFunctionReturnType(
+                                    sourceLines,
+                                    lineNumber
+                                );
+
+                            innerResult =
+                                ReplaceInferredFunctionReturnType(
+                                    innerResult,
+                                    inferredType
+                                );
+                        }
+
+                        // ------------------------------------------------
+                        // Variable declaration / assignment handling
+                        // ------------------------------------------------
+
+                        innerResult =
+                            NormalizeVariableStatement(
+                                blockCode,
+                                innerResult,
+                                variableScopes
+                            );
+
+                        // ------------------------------------------------
+                        // Object construction
+                        // ------------------------------------------------
+
+                        innerResult =
+                            AddImplicitConstructorKeyword(
+                                blockCode,
+                                innerResult,
+                                declaredClasses
+                            );
+
+                        // ------------------------------------------------
+                        // Preserve inline comments
+                        // ------------------------------------------------
+
+                        if (
+                            !string.IsNullOrEmpty(
+                                blockComment
+                            )
+                        )
+                        {
+                            innerResult +=
+                                " " + blockComment;
+                        }
+
+                        results.Add(innerResult);
+
+                        sourceLineNumbers.Add(
+                            lineNumber + 1
+                        );
+
+                        // ------------------------------------------------
+                        // Open variable scopes after processing `{`.
+                        // ------------------------------------------------
+
+                        OpenVariableScopes(
+                            variableScopes,
+                            blockCode,
+                            innerResult
+                        );
+                    }
+                    catch (Sprache.ParseException)
+                    {
+                        // Keep fallback behavior consistent
+                        // with normal transpilation.
+                        results.Add(blockCode);
+
+                        sourceLineNumbers.Add(
+                            lineNumber + 1
+                        );
+
+                        OpenVariableScopes(
+                            variableScopes,
+                            blockCode,
+                            blockCode
+                        );
+                    }
+
+                    // ----------------------------------------------------
+                    // Update block depth AFTER processing the current line.
+                    // ----------------------------------------------------
+
+                    blockDepth += opens;
+                    blockDepth -= closes;
+
+                    lineNumber++;
+                }
+
+                // --------------------------------------------------------
+                // The closing `}` of the go block is currently sitting
+                // at sourceLines[lineNumber].
+                //
+                // Consume it and emit the closing C# Task.Run syntax.
+                // --------------------------------------------------------
+
+                if (
+                    lineNumber < sourceLines.Length &&
+                    sourceLines[lineNumber]
+                        .Trim()
+                        .StartsWith("}")
+                )
+                {
+                    if (isAwait)
+                    {
+                        // Since current SharpThon functions are synchronous,
+                        // wait for the Task to complete.
+                        results.Add(
+                            "}).GetAwaiter().GetResult();"
+                        );
+                    }
+                    else
+                    {
+                        results.Add("});");
+                    }
+
+                    sourceLineNumbers.Add(
+                        lineNumber + 1
+                    );
+                }
+
+                // Remove the scope belonging to the go block.
+                if (variableScopes.Count > 1)
+                {
+                    variableScopes.Pop();
+                }
+
+                // `continue` is important because the closing `}`
+                // of the go block must not go through the normal parser.
+                continue;
+            }
+
+            // ------------------------------------------------------------
+            // Normal empty line
+            // ------------------------------------------------------------
 
             if (string.IsNullOrEmpty(code))
             {
                 results.Add("");
-                sourceLineNumbers.Add(lineNumber + 1);
+
+                sourceLineNumbers.Add(
+                    lineNumber + 1
+                );
+
                 continue;
             }
 
-            // Close scopes before resolving the current line. This makes
-            // both `}` and `} else {` behave correctly.
-            CloseVariableScopes(variableScopes, code);
+            // ------------------------------------------------------------
+            // Close scopes before resolving the current line.
+            //
+            // This allows both:
+            //
+            // }
+            //
+            // and:
+            //
+            // } else {
+            //
+            // to behave correctly.
+            // ------------------------------------------------------------
+
+            CloseVariableScopes(
+                variableScopes,
+                code
+            );
+
+            // ------------------------------------------------------------
+            // Class declaration
+            // ------------------------------------------------------------
 
             if (code.StartsWith("class "))
             {
-                var parts = code.Split(
-                    new[] { ' ', '{' },
-                    StringSplitOptions.RemoveEmptyEntries
-                );
+                var parts =
+                    code.Split(
+                        new[] { ' ', '{' },
+                        StringSplitOptions.RemoveEmptyEntries
+                    );
 
                 if (parts.Length >= 2)
+                {
                     currentClass = parts[1];
+                }
             }
 
             try
             {
-                var result = SharpThonParser.Line.Parse(code);
-
-                if (currentClass != null &&
-                    result.StartsWith($"static void {currentClass}("))
-                {
-                    result = result.Replace(
-                        $"static void {currentClass}(",
-                        $"public {currentClass}("
+                var result =
+                    SharpThonParser.Line.Parse(
+                        code
                     );
+
+                // --------------------------------------------------------
+                // Constructor handling
+                // --------------------------------------------------------
+
+                if (
+                    currentClass != null &&
+                    result.StartsWith(
+                        $"static void {currentClass}("
+                    )
+                )
+                {
+                    result =
+                        result.Replace(
+                            $"static void {currentClass}(",
+                            $"public {currentClass}("
+                        );
                 }
 
-                if (IsFunctionDeclaration(code))
+                // --------------------------------------------------------
+                // Function return type inference
+                // --------------------------------------------------------
+
+                if (
+                    IsFunctionDeclaration(code)
+                )
                 {
                     var inferredType =
                         InferFunctionReturnType(
@@ -383,29 +867,57 @@ public class Transpiler
                             lineNumber
                         );
 
-                    result = ReplaceInferredFunctionReturnType(
-                        result,
-                        inferredType
-                    );
+                    result =
+                        ReplaceInferredFunctionReturnType(
+                            result,
+                            inferredType
+                        );
                 }
 
-                // Parser intentionally treats `name = value` as a
-                // declaration. The symbol table decides whether it is
-                // actually a declaration or an assignment.
-                result = NormalizeVariableStatement(
-                    code,
-                    result,
-                    variableScopes,
-                    dictionaryTypes
-                );
+                // --------------------------------------------------------
+                // Variable declarations / assignments
+                // --------------------------------------------------------
 
-                if (!string.IsNullOrEmpty(comment))
-                    result += " " + comment;
+                result =
+                    NormalizeVariableStatement(
+                        code,
+                        result,
+                        variableScopes
+                    );
+
+                // --------------------------------------------------------
+                // Object construction
+                // --------------------------------------------------------
+
+                result =
+                    AddImplicitConstructorKeyword(
+                        code,
+                        result,
+                        declaredClasses
+                    );
+
+                // --------------------------------------------------------
+                // Preserve inline comments
+                // --------------------------------------------------------
+
+                if (
+                    !string.IsNullOrEmpty(comment)
+                )
+                {
+                    result +=
+                        " " + comment;
+                }
 
                 results.Add(result);
-                sourceLineNumbers.Add(lineNumber + 1);
 
-                // Open a scope after processing the line that contains `{`.
+                sourceLineNumbers.Add(
+                    lineNumber + 1
+                );
+
+                // --------------------------------------------------------
+                // Open a scope after processing the line containing `{`.
+                // --------------------------------------------------------
+
                 OpenVariableScopes(
                     variableScopes,
                     code,
@@ -414,11 +926,15 @@ public class Transpiler
             }
             catch (Sprache.ParseException)
             {
+                // Keep the source line as fallback.
                 results.Add(code);
-                sourceLineNumbers.Add(lineNumber + 1);
 
-                // Keep scope tracking alive even when a line is not handled
-                // by the parser yet.
+                sourceLineNumbers.Add(
+                    lineNumber + 1
+                );
+
+                // Keep scope tracking alive even when the parser
+                // doesn't understand this particular line yet.
                 OpenVariableScopes(
                     variableScopes,
                     code,
@@ -427,62 +943,54 @@ public class Transpiler
             }
         }
 
-        var formatted = FormatResults(
-            results,
-            sourceLineNumbers
-        );
+        // ------------------------------------------------------------
+        // Format final C# output.
+        // ------------------------------------------------------------
 
-        return (formatted.Code, formatted.SourceLineNumbers);
+        var formatted =
+            FormatResults(
+                results,
+                sourceLineNumbers
+            );
+
+        return (
+            formatted.Code,
+            formatted.SourceLineNumbers
+        );
     }
 
     private static string NormalizeVariableStatement(
         string sourceCode,
         string transpiledCode,
-        Stack<Dictionary<string, VariableSymbol>> scopes,
-        Dictionary<string, (string KeyType, string ValueType)> dictionaryTypes)
+        Stack<HashSet<string>> scopes)
     {
         var name = GetAssignmentName(sourceCode);
-        if (name == null)
-            return transpiledCode;
 
-        // Dictionary declarations are inferred globally so a later incompatible
-        // assignment can widen the declaration to Dictionary<key, object>.
-        if (dictionaryTypes.TryGetValue(name, out var dictionaryType) &&
-            IsDictionaryDeclaration(sourceCode, name))
+        // Assignments inside a property setter must target the backing field
+        // (or another existing outer symbol), not introduce a local `var`.
+        // C# supplies the setter's `value` parameter implicitly.
+        if (IsPropertySetterAssignment(sourceCode) && name != null)
         {
-            var desiredType =
-                $"Dictionary<{dictionaryType.KeyType}, {dictionaryType.ValueType}>";
-
-            transpiledCode = Regex.Replace(
-                transpiledCode,
-                @"new\s+Dictionary<[^>]+>",
-                _ => $"new {desiredType}",
-                RegexOptions.None);
-
-            if (HasExplicitType(sourceCode))
-            {
-                scopes.Peek()[name] = new VariableSymbol
-                {
-                    Name = name,
-                    Kind = "dictionary",
-                    KeyType = dictionaryType.KeyType,
-                    ValueType = dictionaryType.ValueType,
-                    Type = desiredType
-                };
-                return transpiledCode;
-            }
+            return transpiledCode.Replace(
+                $"var {name} =",
+                $"{name} =",
+                StringComparison.Ordinal
+            );
         }
 
-        // Explicitly typed declarations always remain declarations.
+        // Explicitly typed declarations always remain declarations:
+        //   i: int = 0
+        //   float value = 1.5
         if (HasExplicitType(sourceCode))
         {
-            scopes.Peek()[name] = new VariableSymbol
-            {
-                Name = name,
-                Type = ExtractExplicitType(sourceCode)
-            };
+            if (name != null)
+                scopes.Peek().Add(name);
+
             return transpiledCode;
         }
+
+        if (name == null)
+            return transpiledCode;
 
         if (IsKnownVariable(scopes, name))
         {
@@ -494,189 +1002,51 @@ public class Transpiler
             );
         }
 
-        var symbol = new VariableSymbol { Name = name };
-
-        if (dictionaryTypes.TryGetValue(name, out var info))
-        {
-            symbol.Kind = "dictionary";
-            symbol.KeyType = info.KeyType;
-            symbol.ValueType = info.ValueType;
-            symbol.Type = $"Dictionary<{info.KeyType}, {info.ValueType}>";
-        }
-
-        scopes.Peek()[name] = symbol;
+        // New symbol => declaration in the current scope.
+        scopes.Peek().Add(name);
         return transpiledCode;
     }
 
-    private static bool IsDictionaryDeclaration(string sourceCode, string name)
+    private static HashSet<string> GetDeclaredClasses(string source)
     {
-        return Regex.IsMatch(
-            sourceCode.Trim(),
-            $@"^(?:(?:public|private|protected)\s+)?{Regex.Escape(name)}\s*=\s*\{{");
+        return Regex.Matches(
+                source,
+                @"(?m)^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+            )
+            .Select(match => match.Groups[1].Value)
+            .ToHashSet(StringComparer.Ordinal);
     }
 
-    private static string? ExtractExplicitType(string code)
+    private static string AddImplicitConstructorKeyword(
+        string sourceCode,
+        string transpiledCode,
+        HashSet<string> declaredClasses)
     {
         var match = Regex.Match(
+            sourceCode,
+            @"^(?:(?:public|private|protected)\s+)?[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[A-Za-z_][A-Za-z0-9_]*)?\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\("
+        );
+
+        if (!match.Success || !declaredClasses.Contains(match.Groups[1].Value))
+            return transpiledCode;
+
+        var constructorCall = match.Groups[1].Value;
+
+        return Regex.Replace(
+            transpiledCode,
+            $@"(=\s*)(?!new\s+){Regex.Escape(constructorCall)}\s*\(",
+            $"$1new {constructorCall}(",
+            RegexOptions.None,
+            TimeSpan.FromSeconds(1)
+        );
+    }
+
+    private static bool IsPropertySetterAssignment(string code)
+    {
+        return Regex.IsMatch(
             code,
-            @"^[A-Za-z_][A-Za-z0-9_]*\s*:\s*([A-Za-z_][A-Za-z0-9_]*)"
+            @"^[A-Za-z_][A-Za-z0-9_]*\s*=\s*value\s*;?$"
         );
-
-        return match.Success ? match.Groups[1].Value : null;
-    }
-
-    private static Dictionary<string, (string KeyType, string ValueType)> AnalyzeDictionaryTypes(
-        string[] sourceLines)
-    {
-        var result = new Dictionary<string, (string KeyType, string ValueType)>(
-            StringComparer.Ordinal
-        );
-
-        foreach (var rawLine in sourceLines)
-        {
-            var code = RemoveLineComment(rawLine).Trim();
-            if (code.Length == 0)
-                continue;
-
-            var declaration = Regex.Match(
-                code,
-                @"^(?:(?:public|private|protected)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\{(.*)\}\s*;?$"
-            );
-
-            if (declaration.Success)
-            {
-                var name = declaration.Groups[1].Value;
-                var entries = SplitTopLevel(declaration.Groups[2].Value, ',');
-                var keyTypes = new HashSet<string>(StringComparer.Ordinal);
-                var valueTypes = new HashSet<string>(StringComparer.Ordinal);
-
-                foreach (var entry in entries)
-                {
-                    var pair = SplitDictionaryEntry(entry);
-                    if (pair == null)
-                        continue;
-
-                    keyTypes.Add(InferSharpThonValueType(pair.Value.Key));
-                    valueTypes.Add(InferSharpThonValueType(pair.Value.Value));
-                }
-
-                result[name] = (
-                    keyTypes.Count == 1 ? keyTypes.First() : "object",
-                    valueTypes.Count == 1 ? valueTypes.First() : "object"
-                );
-            }
-        }
-
-        // A later index assignment can change the value type.
-        foreach (var rawLine in sourceLines)
-        {
-            var code = RemoveLineComment(rawLine).Trim();
-            var assignment = Regex.Match(
-                code,
-                @"^([A-Za-z_][A-Za-z0-9_]*)\s*\[([^]]+)\]\s*=\s*(.+?)\s*;?$"
-            );
-
-            if (!assignment.Success)
-                continue;
-
-            var name = assignment.Groups[1].Value;
-            if (!result.TryGetValue(name, out var info))
-                continue;
-
-            var keyType = InferSharpThonValueType(assignment.Groups[2].Value);
-            var valueType = InferSharpThonValueType(assignment.Groups[3].Value);
-
-            if (keyType != info.KeyType && info.KeyType != "object")
-                info.KeyType = "object";
-
-            if (valueType != info.ValueType && info.ValueType != "object")
-                info.ValueType = "object";
-
-            result[name] = info;
-        }
-
-        return result;
-    }
-
-    private static (string Key, string Value)? SplitDictionaryEntry(string entry)
-    {
-        var depth = 0;
-        var inString = false;
-        var escaped = false;
-
-        for (var i = 0; i < entry.Length; i++)
-        {
-            var c = entry[i];
-            if (c == '"' && !escaped)
-                inString = !inString;
-
-            if (!inString)
-            {
-                if (c == '(' || c == '[' || c == '{') depth++;
-                else if (c == ')' || c == ']' || c == '}') depth--;
-                else if (c == ':' && depth == 0)
-                    return (entry[..i].Trim(), entry[(i + 1)..].Trim());
-            }
-
-            escaped = c == '\\' && !escaped;
-            if (c != '\\') escaped = false;
-        }
-
-        return null;
-    }
-
-    private static List<string> SplitTopLevel(string text, char separator)
-    {
-        var result = new List<string>();
-        var start = 0;
-        var depth = 0;
-        var inString = false;
-        var escaped = false;
-
-        for (var i = 0; i < text.Length; i++)
-        {
-            var c = text[i];
-            if (c == '"' && !escaped)
-                inString = !inString;
-
-            if (!inString)
-            {
-                if (c == '(' || c == '[' || c == '{') depth++;
-                else if (c == ')' || c == ']' || c == '}') depth--;
-                else if (c == separator && depth == 0)
-                {
-                    result.Add(text[start..i].Trim());
-                    start = i + 1;
-                }
-            }
-
-            escaped = c == '\\' && !escaped;
-            if (c != '\\') escaped = false;
-        }
-
-        if (start < text.Length)
-            result.Add(text[start..].Trim());
-
-        return result.Where(x => x.Length > 0).ToList();
-    }
-
-    private static string InferSharpThonValueType(string value)
-    {
-        value = value.Trim();
-
-        if (value.StartsWith("\"") && value.EndsWith("\""))
-            return "string";
-
-        if (value == "true" || value == "false")
-            return "bool";
-
-        if (Regex.IsMatch(value, @"^-?\d+$"))
-            return "int";
-
-        if (Regex.IsMatch(value, @"^-?\d+\.\d+[fF]?$"))
-            return value.EndsWith("f", StringComparison.OrdinalIgnoreCase) ? "float" : "double";
-
-        return "object";
     }
 
     private static bool HasExplicitType(string code)
@@ -701,12 +1071,12 @@ public class Transpiler
     }
 
     private static bool IsKnownVariable(
-        Stack<Dictionary<string, VariableSymbol>> scopes,
+        Stack<HashSet<string>> scopes,
         string name)
     {
         foreach (var scope in scopes)
         {
-            if (scope.ContainsKey(name))
+            if (scope.Contains(name))
                 return true;
         }
 
@@ -714,7 +1084,7 @@ public class Transpiler
     }
 
     private static void CloseVariableScopes(
-        Stack<Dictionary<string, VariableSymbol>> scopes,
+        Stack<HashSet<string>> scopes,
         string code)
     {
         var closingBraces = CountBraces(code, '}');
@@ -728,7 +1098,7 @@ public class Transpiler
     }
 
     private static void OpenVariableScopes(
-        Stack<Dictionary<string, VariableSymbol>> scopes,
+        Stack<HashSet<string>> scopes,
         string sourceCode,
         string transpiledCode)
     {
@@ -737,7 +1107,7 @@ public class Transpiler
         var netOpeningScopes = Math.Max(0, openingBraces - closingBraces);
 
         for (int i = 0; i < netOpeningScopes; i++)
-            scopes.Push(new Dictionary<string, VariableSymbol>(StringComparer.Ordinal));
+            scopes.Push(new HashSet<string>(StringComparer.Ordinal));
 
         if (netOpeningScopes == 0)
             return;
@@ -752,7 +1122,7 @@ public class Transpiler
         );
 
         if (forMatch.Success)
-            scopes.Peek()[forMatch.Groups[1].Value] = new VariableSymbol { Name = forMatch.Groups[1].Value };
+            scopes.Peek().Add(forMatch.Groups[1].Value);
 
         // catch/except variable is also local to the new scope.
         var catchMatch = Regex.Match(
@@ -761,12 +1131,12 @@ public class Transpiler
         );
 
         if (catchMatch.Success)
-            scopes.Peek()[catchMatch.Groups[1].Value] = new VariableSymbol { Name = catchMatch.Groups[1].Value };
+            scopes.Peek().Add(catchMatch.Groups[1].Value);
     }
 
     private static void RegisterFunctionParameters(
         string code,
-        Dictionary<string, VariableSymbol> scope)
+        HashSet<string> scope)
     {
         var match = Regex.Match(
             code,
@@ -788,7 +1158,7 @@ public class Transpiler
             );
 
             if (nameMatch.Success)
-                scope[nameMatch.Groups[1].Value] = new VariableSymbol { Name = nameMatch.Groups[1].Value };
+                scope.Add(nameMatch.Groups[1].Value);
             else
             {
                 var plainName = Regex.Match(
@@ -797,7 +1167,7 @@ public class Transpiler
                 );
 
                 if (plainName.Success)
-                    scope[plainName.Value] = new VariableSymbol { Name = plainName.Value };
+                    scope.Add(plainName.Value);
             }
         }
     }
@@ -828,6 +1198,49 @@ public class Transpiler
 
     private static string PrepareSource(string spCode)
     {
+        // A property with a direct return is a get-only expression-bodied
+        // property. Convert it before line-by-line parsing.
+        //
+        // Name -> str {             public string Name => name;
+        //     return name       =>
+        // }
+        spCode = Regex.Replace(
+            spCode,
+            @"(?m)^(\s*)(?:(public|private|protected)\s+)?(?:(static)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*->\s*(int|str|bool|float|double|long|object|Any)\s*\{\s*\r?\n\s*return\s+([^\r\n]+?)\s*\r?\n\s*\}",
+            match =>
+            {
+                var type = match.Groups[5].Value switch
+                {
+                    "str" => "string",
+                    "Any" => "object",
+                    var value => value
+                };
+
+                var access = match.Groups[2].Success
+                    ? match.Groups[2].Value
+                    : "public";
+                var staticModifier = match.Groups[3].Success
+                    ? "static "
+                    : "";
+
+                return $"{match.Groups[1].Value}{access} {staticModifier}" +
+                    $"{type} {match.Groups[4].Value} => " +
+                    match.Groups[6].Value.Trim();
+            }
+        );
+
+        // The parser emits the opening brace for block declarations itself.
+        // Normalize C-style blocks whose `{` is written on the next line so
+        // that the standalone brace is not emitted a second time.
+        //
+        //   def add(x, y)       def add(x, y) {
+        //   {                =>
+        spCode = Regex.Replace(
+            spCode,
+            @"(?m)^(\s*(?:(?:public|private|protected|static)\s+)*def\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^\r\n]*\)(?:\s*->\s*[A-Za-z_][A-Za-z0-9_]*)?)\s*\r?\n\s*\{\s*$",
+            "$1 {"
+        );
+
         spCode = Regex.Replace(
             spCode,
             @"Write\((.+)\)",
@@ -993,41 +1406,12 @@ public class Transpiler
     private static string RemoveLineComment(
         string line)
     {
-        return SplitLineComment(line).Code;
-    }
+        var index = line.IndexOf("//");
 
-    private static (string Code, string Comment) SplitLineComment(string line)
-    {
-        bool inString = false;
-        bool escaped = false;
+        if (index >= 0)
+            return line[..index];
 
-        for (int i = 0; i < line.Length; i++)
-        {
-            char c = line[i];
-
-            if (c == '"' && !escaped)
-                inString = !inString;
-
-            if (!inString)
-            {
-                if (c == '#')
-                    return (line[..i], "//" + line[i..]);
-
-                if (c == '/' &&
-                    i + 1 < line.Length &&
-                    line[i + 1] == '/')
-                {
-                    return (line[..i], line[i..]);
-                }
-            }
-
-            escaped = c == '\\' && !escaped;
-
-            if (c != '\\')
-                escaped = false;
-        }
-
-        return (line, "");
+        return line;
     }
 
     private static string ReplaceInferredFunctionReturnType(
