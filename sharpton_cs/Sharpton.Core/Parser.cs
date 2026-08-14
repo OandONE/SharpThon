@@ -1,9 +1,104 @@
 using Sprache;
+using System.Text.RegularExpressions;
 
 namespace Sharpton.Core;
 
 public static class SharpThonParser
 {
+    private static string BuildListLiteral(string content)
+    {
+        // Empty list
+        if (string.IsNullOrWhiteSpace(content))
+            return "new List<object>()";
+
+        var items = content
+            .Split(',')
+            .Select(x => x.Trim())
+            .Where(x => x.Length > 0)
+            .ToArray();
+
+        if (items.Length == 0)
+            return "new List<object>()";
+
+        string elementType = InferListElementType(items);
+
+        return $"new List<{elementType}> {{ {string.Join(", ", items)} }}";
+    }
+
+    private static string InferListElementType(string[] items)
+    {
+        bool allInt = items.All(
+            x => int.TryParse(x, out _)
+        );
+
+        if (allInt)
+            return "int";
+
+        bool allDouble = items.All(
+            x => double.TryParse(
+                x,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out _
+            )
+        );
+
+        if (allDouble)
+            return "double";
+
+        bool allBool = items.All(
+            x =>
+                x == "true" ||
+                x == "false"
+        );
+
+        if (allBool)
+            return "bool";
+
+        bool allString = items.All(
+            x =>
+                x.Length >= 2 &&
+                x.StartsWith("\"") &&
+                x.EndsWith("\"")
+        );
+
+        if (allString)
+            return "string";
+
+        // Mixed / unknown expressions.
+        return "object";
+    }
+
+    private static string GetVariableCSharpType(
+        IOption<string> type)
+    {
+        if (!type.IsDefined)
+            return "var";
+
+        var value = type.Get();
+
+        if (value.StartsWith("list["))
+        {
+            var elementType = value[5..^1];
+
+            elementType = elementType switch
+            {
+                "str" => "string",
+                "Any" => "object",
+                _ => elementType
+            };
+
+            return $"List<{elementType}>";
+        }
+
+        return value switch
+        {
+            "str" => "string",
+            "Any" => "object",
+            _ => value
+        };
+    }
+
     // Base Tokens
     public static readonly Parser<string> Identifier =
         from first in Parse.Letter.Or(Parse.Char('_'))
@@ -56,6 +151,92 @@ public static class SharpThonParser
         from closeParen in Parse.Char(')').Token()
         select typeName + "(" + arguments + ")";
 
+    // List
+    // List literal:
+    // [1, 2, 3]
+    // ["Ali", "Mamad"]
+    // [true, false]
+    public static readonly Parser<string> ListLiteral =
+        from open in Parse.Char('[').Token()
+        from items in (
+            Parse.CharExcept(",]\n\r")
+                .AtLeastOnce()
+                .Text()
+                .Select(x => x.Trim())
+        )
+        .DelimitedBy(Parse.Char(',').Token())
+        .Optional()
+        from close in Parse.Char(']').Token()
+        select BuildListExpression(
+            items.GetOrElse(new List<string>())
+        );
+
+    private static string BuildListExpression(
+        IEnumerable<string> items)
+    {
+        var values = items.ToList();
+
+        if (values.Count == 0)
+            return "new List<object>()";
+
+        var elementType = InferListElementType(values);
+
+        return
+            $"new List<{elementType}> " +
+            $"{{ {string.Join(", ", values)} }}";
+    }
+
+    private static string InferListElementType(
+        List<string> values)
+    {
+        var types = values
+            .Select(InferListValueType)
+            .Distinct()
+            .ToList();
+
+        if (types.Count == 1)
+            return types[0];
+
+        return "object";
+    }
+
+    private static string InferListValueType(
+        string value)
+    {
+        value = value.Trim();
+
+        if (
+            value.StartsWith("\"") &&
+            value.EndsWith("\"")
+        )
+            return "string";
+
+        if (
+            value == "true" ||
+            value == "false"
+        )
+            return "bool";
+
+        if (Regex.IsMatch(
+            value,
+            @"^-?\d+$"
+        ))
+            return "int";
+
+        if (Regex.IsMatch(
+            value,
+            @"^-?\d+\.\d+[fF]?$"
+        ))
+        {
+            if (value.EndsWith("f", StringComparison.OrdinalIgnoreCase))
+                return "float";
+
+            return "double";
+        }
+
+        return "object";
+    }
+
     // Variables: x = 10 Or x: int = 10
     public static readonly Parser<string> VariableDecl =
         from modifier in
@@ -68,34 +249,61 @@ public static class SharpThonParser
         ).Optional()
 
         from name in Identifier
+
         from type in (
             from colon in Parse.Char(':').Token()
-            from t in Parse.String("int")
-                .Or(Parse.String("str"))
-                .Or(Parse.String("bool"))
-                .Or(Parse.String("float"))
-                .Or(Parse.String("long"))
-                .Or(Parse.String("double"))
-                .Or(Parse.String("object"))
-                .Or(Parse.String("Any"))
-                .Text()
-                .Token()
+
+            from t in
+                (
+                    from listKw in Parse.String("list").Token()
+                    from openBracket in Parse.Char('[').Token()
+
+                    from elementType in
+                        Parse.String("int")
+                            .Or(Parse.String("str"))
+                            .Or(Parse.String("bool"))
+                            .Or(Parse.String("float"))
+                            .Or(Parse.String("long"))
+                            .Or(Parse.String("double"))
+                            .Or(Parse.String("object"))
+                            .Or(Parse.String("Any"))
+                            .Text()
+                            .Token()
+
+                    from closeBracket in Parse.Char(']').Token()
+
+                    select $"list[{elementType}]"
+                )
+                .Or(
+                    Parse.String("int")
+                        .Or(Parse.String("str"))
+                        .Or(Parse.String("bool"))
+                        .Or(Parse.String("float"))
+                        .Or(Parse.String("long"))
+                        .Or(Parse.String("double"))
+                        .Or(Parse.String("object"))
+                        .Or(Parse.String("Any"))
+                        .Text()
+                        .Token()
+                )
+
             select t
         ).Optional()
+
         from eq in Parse.Char('=').Token()
-        from value in ConstructorCall
-            .Or(Parse.CharExcept(";\n\r").AtLeastOnce().Text())
+
+        from value in
+            ListLiteral
+                .Or(ConstructorCall)
+                .Or(Parse.CharExcept(";\n\r").AtLeastOnce().Text())
+
         from semicolon in Parse.Char(';').Optional()
 
         select
-            $"{(modifier.IsDefined ? modifier.Get() + " " : "")}" +
-            $"{(type.IsDefined
-                ? (type.Get() == "str"
-                    ? "string"
-                    : type.Get() == "Any"
-                        ? "object"
-                        : type.Get())
-                : "var")} " +
+            $"{(modifier.IsDefined
+                ? modifier.Get() + " "
+                : "")}" +
+            $"{GetVariableCSharpType(type)} " +
             $"{name} = {value.Trim()};";
 
     // Properties: [public|private|protected] [static] Name -> Type {
@@ -402,6 +610,7 @@ public static class SharpThonParser
             .Or(GetAccessor)
             .Or(SetAccessor)
             .Or(ClassDecl)
+            .Or(ListLiteral)
             .Or(VariableDecl)
             .Or(FunctionDecl)
             .Or(IfStatement)
