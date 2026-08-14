@@ -78,7 +78,7 @@ if (age == 16) {
 * ✅ Package imports — `index.spy` as entry point for folders
 * ✅ Async tasks — `go {...}` and `await go {...}` with block support (sync + async)
 * ✅ CI/CD — GitHub Actions for build and test
-* ✅ Properties — `get`/`set` accessors with modifiers
+* ✅ Inheritance — class `:` parent syntax
 
 ---
 
@@ -381,6 +381,40 @@ Properties support:
 - ✅ `static` properties
 - ✅ Read-only (`get` only) and write-only (`set` only) properties
 
+### Inheritance
+
+SharpThon supports class inheritance. Use `:` to inherit from a parent class.
+
+```spy
+class Animal {
+    public name: str
+
+    def Animal(name: str) {
+        this.name = name
+    }
+
+    public def Speak() {
+        Write("...")
+    }
+}
+
+class Dog : Animal {
+    def Dog(name: str) {
+        // Call parent constructor
+        Animal(name)
+    }
+
+    public def Speak() {
+        Write(name + " says woof!")
+    }
+}
+
+dog = Dog("Rex")
+dog.Speak()
+```
+
+The transpiler converts this to C# class inheritance using `:` syntax.
+
 ### Object Instantiation
 
 Objects are created without the `new` keyword. This keeps the syntax closer to Python.
@@ -615,8 +649,8 @@ SharpThon/
 | Properties                                      | ✅ Complete |
 | Async tasks (`go {...}` / `await go {...}`)     | ✅ Complete |
 | CI/CD                                           | ✅ Complete |
+| Inheritance                                     | ✅ Complete |
 | VS Code Extension (LSP)                        | 🚧 In Progress |
-| Inheritance                                     | ❌          |
 | Interfaces                                      | ❌          |
 | Generics                                        | ❌          |
 | ASP.NET Core support                            | ❌          |

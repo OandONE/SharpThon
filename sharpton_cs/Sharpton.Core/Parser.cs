@@ -363,11 +363,18 @@ public static class SharpThonParser
         from value in Parse.CharExcept("\n\r").Many().Text()
         select $"return {value.Trim()};";
 
-    // Class
+    // Class And Support Interfaces
     public static readonly Parser<string> ClassDecl =
-    from cls in Parse.String("class").Token()
-    from name in Identifier
-    select $"class {name} {{";
+        from cls in Parse.String("class").Token()
+        from name in Identifier
+        from inheritance in (
+            from colon in Parse.Char(':').Token()
+            from baseClass in Identifier
+            select baseClass
+        ).Optional()
+        select inheritance.IsDefined
+            ? $"class {name} : {inheritance.Get()} {{"
+            : $"class {name} {{";
 
     // Go - fire and forget
     public static readonly Parser<string> GoStatement =
@@ -394,6 +401,7 @@ public static class SharpThonParser
             .Or(PropertyDecl)
             .Or(GetAccessor)
             .Or(SetAccessor)
+            .Or(ClassDecl)
             .Or(VariableDecl)
             .Or(FunctionDecl)
             .Or(IfStatement)
