@@ -76,6 +76,9 @@ if (age == 16) {
 * ✅ Properties — `get`/`set` accessors with modifiers
 * ✅ Object instantiation — no `new` keyword needed
 * ✅ Package imports — `index.spy` as entry point for folders
+* ✅ Async tasks — `go {...}` and `await go {...}` with block support (sync + async)
+* ✅ CI/CD — GitHub Actions for build and test
+* ✅ Properties — `get`/`set` accessors with modifiers
 
 ---
 
@@ -457,7 +460,19 @@ This transpiles to:
 await Task.Run(() => do_something());
 ```
 
-This provides a simple syntax for fire-and-forget and awaited background tasks while targeting the .NET `Task` API.
+**Block support:**
+
+```spy
+go {
+    Write("Hello")
+    Write("World")
+}
+
+await go {
+    data = fetch_data()
+    process(data)
+}
+```
 
 ### Error Handling (Python-style Traceback)
 
@@ -528,6 +543,12 @@ for (int i = 0; i < 5; i++) {
 }
 ```
 
+### CI/CD
+
+Every push to GitHub automatically runs build and tests via GitHub Actions.
+
+The workflow file is located at `.github/workflows/dotnet.yml`.
+
 ## 🔄 How It Works
 
 ```text
@@ -592,6 +613,9 @@ SharpThon/
 | Unit tests                                      | ✅ Complete |
 | Clear import errors (missing/circular)          | ✅ Complete |
 | Properties                                      | ✅ Complete |
+| Async tasks (`go {...}` / `await go {...}`)     | ✅ Complete |
+| CI/CD                                           | ✅ Complete |
+| VS Code Extension (LSP)                        | 🚧 In Progress |
 | Inheritance                                     | ❌          |
 | Interfaces                                      | ❌          |
 | Generics                                        | ❌          |
@@ -599,7 +623,6 @@ SharpThon/
 | EF Core support                                 | ❌          |
 | Self-hosting                                    | ❌          |
 | NuGet package                                   | ❌          |
-| CI/CD pipeline                                  | ❌          |
 
 ---
 

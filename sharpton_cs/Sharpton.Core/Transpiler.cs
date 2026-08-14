@@ -429,16 +429,13 @@ public class Transpiler
 
     // CORE TRANSPILATION + SYMBOL TABLE
 
-    private (string Code, List<int> SourceLineNumbers)
-        TranspileCore(string spCode)
+    private (string Code, List<int> SourceLineNumbers) TranspileCore(string spCode)
     {
         spCode = PrepareSource(spCode);
         spCode = FixFloatLiterals(spCode);
 
         // Class declarations may appear after their use, so collect them
-        // before transpiling individual lines. A call becomes a constructor
-        // invocation only when its target is one of these declared classes;
-        // ordinary function calls remain untouched.
+        // before transpiling individual lines.
         var declaredClasses = GetDeclaredClasses(spCode);
 
         var results = new List<string>();
@@ -446,58 +443,423 @@ public class Transpiler
         var sourceLines = spCode.Split('\n');
 
         // SharpThon variable symbol table.
-        // Each block gets its own scope. Lookup walks from the
-        // innermost scope to outer scopes.
+        // Each block gets its own scope.
+        // Lookup walks from the innermost scope to outer scopes.
         var variableScopes = new Stack<HashSet<string>>();
-        variableScopes.Push(new HashSet<string>(StringComparer.Ordinal));
+        variableScopes.Push(
+            new HashSet<string>(StringComparer.Ordinal)
+        );
 
-        for (int lineNumber = 0;
-             lineNumber < sourceLines.Length;
-             lineNumber++)
+        for (
+            int lineNumber = 0;
+            lineNumber < sourceLines.Length;
+            lineNumber++
+        )
         {
             var line = sourceLines[lineNumber];
+
             var index = line.IndexOf("//");
 
-            string comment = index >= 0 ? line[index..] : "";
-            string code = index >= 0 ? line[..index] : line;
+            string comment =
+                index >= 0
+                    ? line[index..]
+                    : "";
+
+            string code =
+                index >= 0
+                    ? line[..index]
+                    : line;
+
             code = code.Trim();
+
+            // ------------------------------------------------------------
+            // Block-style async syntax
+            //
+            // go {
+            //     command
+            // }
+            //
+            // await go {
+            //     command
+            // }
+            //
+            // Old syntax is still handled by the normal parser:
+            //
+            // go command
+            // await go command
+            // ------------------------------------------------------------
+
+            if (
+                code == "go {" ||
+                code == "await go {"
+            )
+            {
+                bool isAwait =
+                    code == "await go {";
+
+                // For normal `go`, run in background.
+                //
+                // For `await go`, we intentionally block until the
+                // Task completes because the current SharpThon
+                // function model is synchronous.
+                //
+                // Later, when async def is supported, this can become:
+                //
+                // await Task.Run(() => {
+                //
+                string wrapper =
+                    isAwait
+                        ? "Task.Run(() => {"
+                        : "Task.Run(() => {";
+
+                results.Add(wrapper);
+                sourceLineNumbers.Add(lineNumber + 1);
+
+                // The go block has its own variable scope.
+                variableScopes.Push(
+                    new HashSet<string>(
+                        StringComparer.Ordinal
+                    )
+                );
+
+                // We already consumed the opening `{`
+                // from `go {`.
+                int blockDepth = 1;
+
+                lineNumber++;
+
+                while (
+                    lineNumber < sourceLines.Length
+                )
+                {
+                    var blockLine =
+                        sourceLines[lineNumber];
+
+                    var blockCommentIndex =
+                        blockLine.IndexOf("//");
+
+                    string blockComment =
+                        blockCommentIndex >= 0
+                            ? blockLine[blockCommentIndex..]
+                            : "";
+
+                    string blockCode =
+                        blockCommentIndex >= 0
+                            ? blockLine[..blockCommentIndex]
+                            : blockLine;
+
+                    blockCode = blockCode.Trim();
+
+                    // ----------------------------------------------------
+                    // Empty line
+                    // ----------------------------------------------------
+
+                    if (string.IsNullOrEmpty(blockCode))
+                    {
+                        results.Add("");
+
+                        sourceLineNumbers.Add(
+                            lineNumber + 1
+                        );
+
+                        lineNumber++;
+                        continue;
+                    }
+
+                    // ----------------------------------------------------
+                    // Count braces BEFORE parsing the line.
+                    // ----------------------------------------------------
+
+                    int opens =
+                        CountBraces(
+                            blockCode,
+                            '{'
+                        );
+
+                    int closes =
+                        CountBraces(
+                            blockCode,
+                            '}'
+                        );
+
+                    // ----------------------------------------------------
+                    // If we are at the outermost level and this line is
+                    // the closing brace of the go block, stop here.
+                    //
+                    // Do NOT send this `}` to the SharpThon parser.
+                    // ----------------------------------------------------
+
+                    if (
+                        blockDepth == 1 &&
+                        blockCode == "}"
+                    )
+                    {
+                        break;
+                    }
+
+                    // ----------------------------------------------------
+                    // Handle variable scopes before parsing.
+                    // ----------------------------------------------------
+
+                    CloseVariableScopes(
+                        variableScopes,
+                        blockCode
+                    );
+
+                    try
+                    {
+                        var innerResult =
+                            SharpThonParser.Line.Parse(
+                                blockCode
+                            );
+
+                        // ------------------------------------------------
+                        // Constructor handling
+                        // ------------------------------------------------
+
+                        if (
+                            currentClass != null &&
+                            innerResult.StartsWith(
+                                $"static void {currentClass}("
+                            )
+                        )
+                        {
+                            innerResult =
+                                innerResult.Replace(
+                                    $"static void {currentClass}(",
+                                    $"public {currentClass}("
+                                );
+                        }
+
+                        // ------------------------------------------------
+                        // Function return type inference
+                        // ------------------------------------------------
+
+                        if (
+                            IsFunctionDeclaration(
+                                blockCode
+                            )
+                        )
+                        {
+                            var inferredType =
+                                InferFunctionReturnType(
+                                    sourceLines,
+                                    lineNumber
+                                );
+
+                            innerResult =
+                                ReplaceInferredFunctionReturnType(
+                                    innerResult,
+                                    inferredType
+                                );
+                        }
+
+                        // ------------------------------------------------
+                        // Variable declaration / assignment handling
+                        // ------------------------------------------------
+
+                        innerResult =
+                            NormalizeVariableStatement(
+                                blockCode,
+                                innerResult,
+                                variableScopes
+                            );
+
+                        // ------------------------------------------------
+                        // Object construction
+                        // ------------------------------------------------
+
+                        innerResult =
+                            AddImplicitConstructorKeyword(
+                                blockCode,
+                                innerResult,
+                                declaredClasses
+                            );
+
+                        // ------------------------------------------------
+                        // Preserve inline comments
+                        // ------------------------------------------------
+
+                        if (
+                            !string.IsNullOrEmpty(
+                                blockComment
+                            )
+                        )
+                        {
+                            innerResult +=
+                                " " + blockComment;
+                        }
+
+                        results.Add(innerResult);
+
+                        sourceLineNumbers.Add(
+                            lineNumber + 1
+                        );
+
+                        // ------------------------------------------------
+                        // Open variable scopes after processing `{`.
+                        // ------------------------------------------------
+
+                        OpenVariableScopes(
+                            variableScopes,
+                            blockCode,
+                            innerResult
+                        );
+                    }
+                    catch (Sprache.ParseException)
+                    {
+                        // Keep fallback behavior consistent
+                        // with normal transpilation.
+                        results.Add(blockCode);
+
+                        sourceLineNumbers.Add(
+                            lineNumber + 1
+                        );
+
+                        OpenVariableScopes(
+                            variableScopes,
+                            blockCode,
+                            blockCode
+                        );
+                    }
+
+                    // ----------------------------------------------------
+                    // Update block depth AFTER processing the current line.
+                    // ----------------------------------------------------
+
+                    blockDepth += opens;
+                    blockDepth -= closes;
+
+                    lineNumber++;
+                }
+
+                // --------------------------------------------------------
+                // The closing `}` of the go block is currently sitting
+                // at sourceLines[lineNumber].
+                //
+                // Consume it and emit the closing C# Task.Run syntax.
+                // --------------------------------------------------------
+
+                if (
+                    lineNumber < sourceLines.Length &&
+                    sourceLines[lineNumber]
+                        .Trim()
+                        .StartsWith("}")
+                )
+                {
+                    if (isAwait)
+                    {
+                        // Since current SharpThon functions are synchronous,
+                        // wait for the Task to complete.
+                        results.Add(
+                            "}).GetAwaiter().GetResult();"
+                        );
+                    }
+                    else
+                    {
+                        results.Add("});");
+                    }
+
+                    sourceLineNumbers.Add(
+                        lineNumber + 1
+                    );
+                }
+
+                // Remove the scope belonging to the go block.
+                if (variableScopes.Count > 1)
+                {
+                    variableScopes.Pop();
+                }
+
+                // `continue` is important because the closing `}`
+                // of the go block must not go through the normal parser.
+                continue;
+            }
+
+            // ------------------------------------------------------------
+            // Normal empty line
+            // ------------------------------------------------------------
 
             if (string.IsNullOrEmpty(code))
             {
                 results.Add("");
-                sourceLineNumbers.Add(lineNumber + 1);
+
+                sourceLineNumbers.Add(
+                    lineNumber + 1
+                );
+
                 continue;
             }
 
-            // Close scopes before resolving the current line. This makes
-            // both `}` and `} else {` behave correctly.
-            CloseVariableScopes(variableScopes, code);
+            // ------------------------------------------------------------
+            // Close scopes before resolving the current line.
+            //
+            // This allows both:
+            //
+            // }
+            //
+            // and:
+            //
+            // } else {
+            //
+            // to behave correctly.
+            // ------------------------------------------------------------
+
+            CloseVariableScopes(
+                variableScopes,
+                code
+            );
+
+            // ------------------------------------------------------------
+            // Class declaration
+            // ------------------------------------------------------------
 
             if (code.StartsWith("class "))
             {
-                var parts = code.Split(
-                    new[] { ' ', '{' },
-                    StringSplitOptions.RemoveEmptyEntries
-                );
+                var parts =
+                    code.Split(
+                        new[] { ' ', '{' },
+                        StringSplitOptions.RemoveEmptyEntries
+                    );
 
                 if (parts.Length >= 2)
+                {
                     currentClass = parts[1];
+                }
             }
 
             try
             {
-                var result = SharpThonParser.Line.Parse(code);
-
-                if (currentClass != null &&
-                    result.StartsWith($"static void {currentClass}("))
-                {
-                    result = result.Replace(
-                        $"static void {currentClass}(",
-                        $"public {currentClass}("
+                var result =
+                    SharpThonParser.Line.Parse(
+                        code
                     );
+
+                // --------------------------------------------------------
+                // Constructor handling
+                // --------------------------------------------------------
+
+                if (
+                    currentClass != null &&
+                    result.StartsWith(
+                        $"static void {currentClass}("
+                    )
+                )
+                {
+                    result =
+                        result.Replace(
+                            $"static void {currentClass}(",
+                            $"public {currentClass}("
+                        );
                 }
 
-                if (IsFunctionDeclaration(code))
+                // --------------------------------------------------------
+                // Function return type inference
+                // --------------------------------------------------------
+
+                if (
+                    IsFunctionDeclaration(code)
+                )
                 {
                     var inferredType =
                         InferFunctionReturnType(
@@ -505,34 +867,57 @@ public class Transpiler
                             lineNumber
                         );
 
-                    result = ReplaceInferredFunctionReturnType(
-                        result,
-                        inferredType
-                    );
+                    result =
+                        ReplaceInferredFunctionReturnType(
+                            result,
+                            inferredType
+                        );
                 }
 
-                // Parser intentionally treats `name = value` as a
-                // declaration. The symbol table decides whether it is
-                // actually a declaration or an assignment.
-                result = NormalizeVariableStatement(
-                    code,
-                    result,
-                    variableScopes
-                );
+                // --------------------------------------------------------
+                // Variable declarations / assignments
+                // --------------------------------------------------------
 
-                result = AddImplicitConstructorKeyword(
-                    code,
-                    result,
-                    declaredClasses
-                );
+                result =
+                    NormalizeVariableStatement(
+                        code,
+                        result,
+                        variableScopes
+                    );
 
-                if (!string.IsNullOrEmpty(comment))
-                    result += " " + comment;
+                // --------------------------------------------------------
+                // Object construction
+                // --------------------------------------------------------
+
+                result =
+                    AddImplicitConstructorKeyword(
+                        code,
+                        result,
+                        declaredClasses
+                    );
+
+                // --------------------------------------------------------
+                // Preserve inline comments
+                // --------------------------------------------------------
+
+                if (
+                    !string.IsNullOrEmpty(comment)
+                )
+                {
+                    result +=
+                        " " + comment;
+                }
 
                 results.Add(result);
-                sourceLineNumbers.Add(lineNumber + 1);
 
-                // Open a scope after processing the line that contains `{`.
+                sourceLineNumbers.Add(
+                    lineNumber + 1
+                );
+
+                // --------------------------------------------------------
+                // Open a scope after processing the line containing `{`.
+                // --------------------------------------------------------
+
                 OpenVariableScopes(
                     variableScopes,
                     code,
@@ -541,11 +926,15 @@ public class Transpiler
             }
             catch (Sprache.ParseException)
             {
+                // Keep the source line as fallback.
                 results.Add(code);
-                sourceLineNumbers.Add(lineNumber + 1);
 
-                // Keep scope tracking alive even when a line is not handled
-                // by the parser yet.
+                sourceLineNumbers.Add(
+                    lineNumber + 1
+                );
+
+                // Keep scope tracking alive even when the parser
+                // doesn't understand this particular line yet.
                 OpenVariableScopes(
                     variableScopes,
                     code,
@@ -554,12 +943,20 @@ public class Transpiler
             }
         }
 
-        var formatted = FormatResults(
-            results,
-            sourceLineNumbers
-        );
+        // ------------------------------------------------------------
+        // Format final C# output.
+        // ------------------------------------------------------------
 
-        return (formatted.Code, formatted.SourceLineNumbers);
+        var formatted =
+            FormatResults(
+                results,
+                sourceLineNumbers
+            );
+
+        return (
+            formatted.Code,
+            formatted.SourceLineNumbers
+        );
     }
 
     private static string NormalizeVariableStatement(
