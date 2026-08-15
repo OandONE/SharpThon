@@ -1,0 +1,5 @@
+import MyLibrary
+
+def run() {
+    MyLibrary.sum(1, 2)
+}

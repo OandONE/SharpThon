@@ -1,0 +1,18 @@
+def run() {
+    dog = Dog()
+
+    Write(dog.Speak())
+    Write(dog.Bark())
+}
+
+class Animal {
+    public def Speak() -> str {
+        return "animal"
+    }
+}
+
+class Dog : Animal {
+    public def Bark() -> str {
+        return "woof"
+    }
+}

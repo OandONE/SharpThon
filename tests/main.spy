@@ -6,6 +6,10 @@ import TestStrings
 import TestImports
 import CStyleForLoop
 import TestProperties
+import TestGoBlock
+import TestInheritance
+import TestList
+import TestIndex
 
 def main() {
     Write("================================")
@@ -20,6 +24,10 @@ def main() {
     TestImports.run()
     CStyleForLoop.run()
     TestProperties.run()
+    TestGoBlock.run()
+    TestInheritance.run()
+    TestList.run()
+    TestIndex.run()
 
     Write("================================")
     Write("        ALL TESTS PASSED")

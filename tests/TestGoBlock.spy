@@ -1,0 +1,11 @@
+def run() {
+    x = 10
+
+    go {
+        if (x > 5) {
+            Write("yes")
+        }
+
+        Write("done")
+    }
+}
