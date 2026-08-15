@@ -1,0 +1,23 @@
+def run() {
+    Write("[Dictionary]")
+
+    data = {
+        "ali": 16,
+        "mamad": 20
+    }
+
+    Write(data["ali"])
+    Write(data["mamad"])
+
+    data["reza"] = 30
+    Write(data["reza"])
+
+    data["ali"] = 17
+    Write(data["ali"])
+
+    data["message"] = "hello"
+    Write(data["message"])
+
+    data[42] = 100
+    Write(data[42])
+}

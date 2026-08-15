@@ -151,11 +151,7 @@ public static class SharpThonParser
         from closeParen in Parse.Char(')').Token()
         select typeName + "(" + arguments + ")";
 
-    // List
-    // List literal:
-    // [1, 2, 3]
-    // ["Ali", "Mamad"]
-    // [true, false]
+    // List - literal: [1, 2, 3] or ["mamad", "sam", true, false]
     public static readonly Parser<string> ListLiteral =
         from open in Parse.Char('[').Token()
         from items in (
@@ -169,6 +165,53 @@ public static class SharpThonParser
         from close in Parse.Char(']').Token()
         select BuildListExpression(
             items.GetOrElse(new List<string>())
+        );
+
+    private static string BuildDictionaryExpression(
+        IEnumerable<(string Key, string Value)> entries)
+    {
+        var values = entries.ToList();
+
+        if (values.Count == 0)
+            return "new Dictionary<object, object>()";
+
+        var initializer = string.Join(
+            ", ",
+            values.Select(x => $"[{x.Key}] = {x.Value}")
+        );
+
+        return $"new Dictionary<object, object> {{ {initializer} }}";
+    }
+
+    public static readonly Parser<string> DictionaryLiteral =
+        from open in Parse.Char('{').Token()
+
+        from entries in (
+            from key in
+                Parse.CharExcept(":,}\n\r")
+                    .AtLeastOnce()
+                    .Text()
+                    .Select(x => x.Trim())
+
+            from colon in
+                Parse.Char(':').Token()
+
+            from value in
+                Parse.CharExcept(",}\n\r")
+                    .AtLeastOnce()
+                    .Text()
+                    .Select(x => x.Trim())
+
+            select (Key: key, Value: value)
+
+        ).DelimitedBy(Parse.Char(',').Token()).Optional()
+
+        from close in Parse.Char('}').Token()
+
+        select BuildDictionaryExpression(
+            entries.GetOrElse(
+                new List<(string Key, string Value)>()
+            )
         );
 
     private static string BuildListExpression(
@@ -293,7 +336,8 @@ public static class SharpThonParser
         from eq in Parse.Char('=').Token()
 
         from value in
-            ListLiteral
+            DictionaryLiteral
+                .Or(ListLiteral)
                 .Or(ConstructorCall)
                 .Or(Parse.CharExcept(";\n\r").AtLeastOnce().Text())
 
@@ -610,6 +654,7 @@ public static class SharpThonParser
             .Or(GetAccessor)
             .Or(SetAccessor)
             .Or(ClassDecl)
+            .Or(DictionaryLiteral)
             .Or(ListLiteral)
             .Or(VariableDecl)
             .Or(FunctionDecl)

@@ -1,0 +1,7 @@
+def run() {
+    url = "https://github.com/OandONE/SharpThon"
+    text = "# not a comment"
+
+    Write(f"the url: {url}")
+    Write(f"the text: {text}")
+}

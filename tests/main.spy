@@ -10,6 +10,8 @@ import TestGoBlock
 import TestInheritance
 import TestList
 import TestIndex
+import TestNotCommand
+import TestDictionary
 
 def main() {
     Write("================================")
@@ -28,6 +30,8 @@ def main() {
     TestInheritance.run()
     TestList.run()
     TestIndex.run()
+    TestNotCommand.run()
+    TestDictionary.run()
 
     Write("================================")
     Write("        ALL TESTS PASSED")

@@ -1262,6 +1262,8 @@ public class Transpiler
                 "\""
         );
 
+        spCode = CollapseMultilineDictionaries(spCode);
+
         return spCode;
     }
 
@@ -1594,5 +1596,53 @@ public class Transpiler
         }
 
         return (line, "");
+    }
+
+    private static string CollapseMultilineDictionaries(string source)
+    {
+        var lines = source.Split('\n');
+        var result = new List<string>();
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+
+            // Dictionary assignment:
+            // data = {
+            // data: dict[str, int] = {
+            bool startsDictionary =
+                Regex.IsMatch(
+                    line,
+                    @"^\s*[A-Za-z_][A-Za-z0-9_]*\s*(?::\s*dict\s*\[[^\]]+\])?\s*=\s*\{\s*$"
+                );
+
+            if (!startsDictionary)
+            {
+                result.Add(line);
+                continue;
+            }
+
+            var combined = line.TrimEnd();
+            int depth = 1;
+
+            while (depth > 0 && i + 1 < lines.Length)
+            {
+                i++;
+
+                var nextLine = lines[i].Trim();
+
+                if (nextLine.Length == 0)
+                    continue;
+
+                combined += " " + nextLine;
+
+                depth += CountBraces(nextLine, '{');
+                depth -= CountBraces(nextLine, '}');
+            }
+
+            result.Add(combined);
+        }
+
+        return string.Join("\n", result);
     }
 }
