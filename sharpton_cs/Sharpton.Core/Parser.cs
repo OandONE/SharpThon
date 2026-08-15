@@ -1,4 +1,5 @@
 using Sprache;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Sharpton.Core;
@@ -75,28 +76,7 @@ public static class SharpThonParser
         if (!type.IsDefined)
             return "var";
 
-        var value = type.Get();
-
-        if (value.StartsWith("list["))
-        {
-            var elementType = value[5..^1];
-
-            elementType = elementType switch
-            {
-                "str" => "string",
-                "Any" => "object",
-                _ => elementType
-            };
-
-            return $"List<{elementType}>";
-        }
-
-        return value switch
-        {
-            "str" => "string",
-            "Any" => "object",
-            _ => value
-        };
+        return type.Get();
     }
 
     // Base Tokens
@@ -122,24 +102,31 @@ public static class SharpThonParser
         )
         from name in Identifier
         from colon in Parse.Char(':').Token()
-        from type in Parse.String("int")
-            .Or(Parse.String("str"))
-            .Or(Parse.String("bool"))
-            .Or(Parse.String("float"))
-            .Or(Parse.String("long"))
-            .Or(Parse.String("double"))
-            .Or(Parse.String("object"))
-            .Or(Parse.String("Any"))
-            .Text()
-            .Token()
-        select
-            $"{modifier} " +
-            $"{(type == "str"
-                ? "string"
-                : type == "Any"
-                    ? "object"
-                    : type)} " +
-            $"{name};";
+        from type in TypeName
+        select $"{modifier} {type} {name};";
+    private static string MapTypeName(string type)
+    {
+        return type switch
+        {
+            "str" => "string",
+            "Any" => "object",
+            _ => type
+        };
+    }
+
+    public static readonly Parser<string> TypeName =
+        Parse.Ref(() =>
+            from name in Identifier
+            from genericArgs in (
+                from open in Parse.Char('<').Token()
+                from args in TypeName.DelimitedBy(Parse.Char(',').Token())
+                from close in Parse.Char('>').Token()
+                select args.ToList()
+            ).Optional()
+            select genericArgs.IsDefined
+                ? $"{MapTypeName(name)}<{string.Join(", ", genericArgs.Get())}>"
+                : MapTypeName(name)
+        );
 
     // Constructor-shaped values are parsed separately from generic values.
     // Whether the name is actually a class is resolved by Transpiler using
@@ -151,20 +138,35 @@ public static class SharpThonParser
         from closeParen in Parse.Char(')').Token()
         select typeName + "(" + arguments + ")";
 
-    // List - literal: [1, 2, 3] or ["mamad", "sam", true, false]
+    // Recursive collection value parser. Allows nested lists and dictionaries.
+    public static readonly Parser<string> ValueLiteral =
+        Parse.Ref(() =>
+            DictionaryLiteral
+                .Or(ListLiteral)
+                .Or(ConstructorCall)
+                .Or(
+                    Parse.CharExcept(",}]\n\r")
+                        .AtLeastOnce()
+                        .Text()
+                        .Select(x => x.Trim())
+                )
+        );
+
+    // List literal:
+    // [1, 2, 3]
+    // [[1, 2], [3, 4]]
+    // [ {"a": 1}, {"b": 2} ]
     public static readonly Parser<string> ListLiteral =
-        from open in Parse.Char('[').Token()
-        from items in (
-            Parse.CharExcept(",]\n\r")
-                .AtLeastOnce()
-                .Text()
-                .Select(x => x.Trim())
-        )
-        .DelimitedBy(Parse.Char(',').Token())
-        .Optional()
-        from close in Parse.Char(']').Token()
-        select BuildListExpression(
-            items.GetOrElse(new List<string>())
+        Parse.Ref(() =>
+            from open in Parse.Char('[').Token()
+            from items in
+                ValueLiteral
+                    .DelimitedBy(Parse.Char(',').Token())
+                    .Optional()
+            from close in Parse.Char(']').Token()
+            select BuildListExpression(
+                items.GetOrElse(new List<string>())
+            )
         );
 
     private static string BuildDictionaryExpression(
@@ -185,29 +187,17 @@ public static class SharpThonParser
 
     public static readonly Parser<string> DictionaryLiteral =
         from open in Parse.Char('{').Token()
-
         from entries in (
             from key in
                 Parse.CharExcept(":,}\n\r")
                     .AtLeastOnce()
                     .Text()
                     .Select(x => x.Trim())
-
-            from colon in
-                Parse.Char(':').Token()
-
-            from value in
-                Parse.CharExcept(",}\n\r")
-                    .AtLeastOnce()
-                    .Text()
-                    .Select(x => x.Trim())
-
+            from colon in Parse.Char(':').Token()
+            from value in ValueLiteral
             select (Key: key, Value: value)
-
         ).DelimitedBy(Parse.Char(',').Token()).Optional()
-
         from close in Parse.Char('}').Token()
-
         select BuildDictionaryExpression(
             entries.GetOrElse(
                 new List<(string Key, string Value)>()
@@ -217,7 +207,9 @@ public static class SharpThonParser
     private static string BuildListExpression(
         IEnumerable<string> items)
     {
-        var values = items.ToList();
+        var values = items
+            .Select(x => x.Trim())
+            .ToList();
 
         if (values.Count == 0)
             return "new List<object>()";
@@ -232,6 +224,25 @@ public static class SharpThonParser
     private static string InferListElementType(
         List<string> values)
     {
+        if (values.Count == 0)
+            return "object";
+
+        if (values.All(IsListExpression))
+        {
+            var nestedTypes = values
+                .Select(GetListElementTypeFromExpression)
+                .Distinct()
+                .ToList();
+
+            if (nestedTypes.Count == 1)
+                return $"List<{nestedTypes[0]}>";
+
+            return "List<object>";
+        }
+
+        if (values.All(IsDictionaryExpression))
+            return "Dictionary<object, object>";
+
         var types = values
             .Select(InferListValueType)
             .Distinct()
@@ -243,10 +254,49 @@ public static class SharpThonParser
         return "object";
     }
 
+    private static bool IsListExpression(string value)
+    {
+        value = value.Trim();
+        return value.StartsWith("new List<", StringComparison.Ordinal) &&
+               value.Contains('>');
+    }
+
+    private static bool IsDictionaryExpression(string value)
+    {
+        value = value.Trim();
+        return value.StartsWith("new Dictionary<", StringComparison.Ordinal) &&
+               value.Contains('>');
+    }
+
+    private static string GetListElementTypeFromExpression(
+        string value)
+    {
+        value = value.Trim();
+
+        const string prefix = "new List<";
+
+        if (!value.StartsWith(prefix, StringComparison.Ordinal))
+            return "object";
+
+        var start = prefix.Length;
+        var end = value.LastIndexOf('>');
+
+        if (end < 0)
+            return "object";
+
+        return value.Substring(start, end - start);
+    }
+
     private static string InferListValueType(
         string value)
     {
         value = value.Trim();
+
+        if (IsListExpression(value))
+            return GetListElementTypeFromExpression(value);
+
+        if (IsDictionaryExpression(value))
+            return "Dictionary<object, object>";
 
         if (
             value.StartsWith("\"") &&
@@ -260,16 +310,10 @@ public static class SharpThonParser
         )
             return "bool";
 
-        if (Regex.IsMatch(
-            value,
-            @"^-?\d+$"
-        ))
+        if (Regex.IsMatch(value, @"^-?\d+$"))
             return "int";
 
-        if (Regex.IsMatch(
-            value,
-            @"^-?\d+\.\d+[fF]?$"
-        ))
+        if (Regex.IsMatch(value, @"^-?\d+\.\d+[fF]?$"))
         {
             if (value.EndsWith("f", StringComparison.OrdinalIgnoreCase))
                 return "float";
@@ -278,6 +322,284 @@ public static class SharpThonParser
         }
 
         return "object";
+    }
+
+    private static string ApplyDeclaredTypeToDictionary(
+        IOption<string> type,
+        string value)
+    {
+        if (!type.IsDefined)
+            return value;
+
+        var declaredType = type.Get();
+
+        if (!declaredType.StartsWith(
+                "Dictionary<",
+                StringComparison.Ordinal))
+            return value;
+
+        if (!value.StartsWith(
+                "new Dictionary<object, object>",
+                StringComparison.Ordinal))
+            return value;
+
+        var genericArguments = ExtractGenericArguments(declaredType);
+
+        if (genericArguments.Count != 2)
+            return value;
+
+        return ConvertDictionaryExpression(
+            value,
+            genericArguments[0],
+            genericArguments[1]
+        );
+    }
+
+    private static string ConvertDictionaryExpression(
+        string value,
+        string expectedKeyType,
+        string expectedValueType)
+    {
+        value = value.Trim();
+
+        var openBrace = value.IndexOf('{');
+        var closeBrace = value.LastIndexOf('}');
+
+        if (openBrace < 0 || closeBrace < openBrace)
+            return value;
+
+        var body = value.Substring(
+            openBrace + 1,
+            closeBrace - openBrace - 1
+        ).Trim();
+
+        if (body.Length == 0)
+            return
+                $"new Dictionary<{expectedKeyType}, {expectedValueType}>()";
+
+        var entries = SplitTopLevelCommaSeparated(body);
+        var convertedEntries = new List<string>();
+
+        foreach (var entry in entries)
+        {
+            var separator = entry.IndexOf("] = ", StringComparison.Ordinal);
+
+            if (separator < 0)
+            {
+                convertedEntries.Add(entry.Trim());
+                continue;
+            }
+
+            var key = entry.Substring(0, separator + 1).Trim();
+            var itemValue = entry.Substring(separator + 4).Trim();
+
+            var rawKey = key.StartsWith("[") && key.EndsWith("]")
+                ? key.Substring(1, key.Length - 2).Trim()
+                : key;
+
+            var convertedKey = ConvertCollectionValue(
+                rawKey,
+                expectedKeyType
+            );
+
+            var convertedValue = ConvertCollectionValue(
+                itemValue,
+                expectedValueType
+            );
+
+            convertedEntries.Add(
+                $"[{convertedKey}] = {convertedValue}"
+            );
+        }
+
+        return
+            $"new Dictionary<{expectedKeyType}, {expectedValueType}> " +
+            $"{{ {string.Join(", ", convertedEntries)} }}";
+    }
+
+    private static string ApplyDeclaredTypeToCollection(
+        IOption<string> type,
+        string value)
+    {
+        if (!type.IsDefined)
+            return value;
+
+        var declaredType = type.Get();
+
+        if (declaredType.StartsWith("Dictionary<", StringComparison.Ordinal))
+            return ApplyDeclaredTypeToDictionary(type, value);
+
+        if (!declaredType.StartsWith("List<", StringComparison.Ordinal))
+            return value;
+
+        if (!value.StartsWith("new List<", StringComparison.Ordinal))
+            return value;
+
+        var elementType = ExtractGenericArgument(declaredType);
+
+        if (string.IsNullOrEmpty(elementType))
+            return value;
+
+        return ConvertListExpression(value, elementType);
+    }
+
+    private static string ConvertListExpression(
+        string value,
+        string expectedElementType)
+    {
+        value = value.Trim();
+
+        var openBrace = value.IndexOf('{');
+        var closeBrace = value.LastIndexOf('}');
+
+        if (openBrace < 0 || closeBrace < openBrace)
+            return value;
+
+        var body = value.Substring(
+            openBrace + 1,
+            closeBrace - openBrace - 1
+        ).Trim();
+
+        var items = SplitTopLevelCommaSeparated(body);
+
+        var convertedItems = items
+            .Select(item => ConvertCollectionValue(
+                item,
+                expectedElementType
+            ))
+            .ToList();
+
+        return
+            $"new List<{expectedElementType}> " +
+            $"{{ {string.Join(", ", convertedItems)} }}";
+    }
+
+    private static string ConvertCollectionValue(
+        string value,
+        string expectedType)
+    {
+        value = value.Trim();
+
+        if (expectedType.StartsWith("List<", StringComparison.Ordinal) &&
+            value.StartsWith("new List<", StringComparison.Ordinal))
+        {
+            var nestedElementType = ExtractGenericArgument(expectedType);
+
+            if (!string.IsNullOrEmpty(nestedElementType))
+                return ConvertListExpression(value, nestedElementType);
+        }
+
+        if (expectedType.StartsWith(
+                "Dictionary<",
+                StringComparison.Ordinal) &&
+            value.StartsWith(
+                "new Dictionary<object, object>",
+                StringComparison.Ordinal))
+        {
+            var genericArguments = ExtractGenericArguments(expectedType);
+
+            if (genericArguments.Count == 2)
+            {
+                return ConvertDictionaryExpression(
+                    value,
+                    genericArguments[0],
+                    genericArguments[1]
+                );
+            }
+        }
+
+        if (expectedType == "float" &&
+            Regex.IsMatch(value, @"^-?\d+\.\d+$"))
+        {
+            return value + "f";
+        }
+
+        return value;
+    }
+
+    private static List<string> ExtractGenericArguments(string type)
+    {
+        var open = type.IndexOf('<');
+        var close = type.LastIndexOf('>');
+
+        if (open < 0 || close <= open)
+            return new List<string>();
+
+        var body = type.Substring(
+            open + 1,
+            close - open - 1
+        );
+
+        return SplitTopLevelCommaSeparated(body);
+    }
+
+    private static string ExtractGenericArgument(string type)
+    {
+        var open = type.IndexOf('<');
+        var close = type.LastIndexOf('>');
+
+        if (open < 0 || close <= open)
+            return "";
+
+        return type.Substring(
+            open + 1,
+            close - open - 1
+        );
+    }
+
+    private static List<string> SplitTopLevelCommaSeparated(
+        string value)
+    {
+        var result = new List<string>();
+        var current = new StringBuilder();
+
+        var angleDepth = 0;
+        var braceDepth = 0;
+        var bracketDepth = 0;
+        var inString = false;
+        var escaped = false;
+
+        foreach (var ch in value)
+        {
+            if (ch == '"' && !escaped)
+                inString = !inString;
+
+            if (!inString)
+            {
+                if (ch == '<') angleDepth++;
+                else if (ch == '>') angleDepth--;
+                else if (ch == '{') braceDepth++;
+                else if (ch == '}') braceDepth--;
+                else if (ch == '[') bracketDepth++;
+                else if (ch == ']') bracketDepth--;
+            }
+
+            if (
+                ch == ',' &&
+                !inString &&
+                angleDepth == 0 &&
+                braceDepth == 0 &&
+                bracketDepth == 0
+            )
+            {
+                result.Add(current.ToString().Trim());
+                current.Clear();
+                escaped = false;
+                continue;
+            }
+
+            current.Append(ch);
+
+            if (ch == '\\' && !escaped)
+                escaped = true;
+            else
+                escaped = false;
+        }
+
+        if (current.Length > 0)
+            result.Add(current.ToString().Trim());
+
+        return result;
     }
 
     // Variables: x = 10 Or x: int = 10
@@ -295,41 +617,7 @@ public static class SharpThonParser
 
         from type in (
             from colon in Parse.Char(':').Token()
-
-            from t in
-                (
-                    from listKw in Parse.String("list").Token()
-                    from openBracket in Parse.Char('[').Token()
-
-                    from elementType in
-                        Parse.String("int")
-                            .Or(Parse.String("str"))
-                            .Or(Parse.String("bool"))
-                            .Or(Parse.String("float"))
-                            .Or(Parse.String("long"))
-                            .Or(Parse.String("double"))
-                            .Or(Parse.String("object"))
-                            .Or(Parse.String("Any"))
-                            .Text()
-                            .Token()
-
-                    from closeBracket in Parse.Char(']').Token()
-
-                    select $"list[{elementType}]"
-                )
-                .Or(
-                    Parse.String("int")
-                        .Or(Parse.String("str"))
-                        .Or(Parse.String("bool"))
-                        .Or(Parse.String("float"))
-                        .Or(Parse.String("long"))
-                        .Or(Parse.String("double"))
-                        .Or(Parse.String("object"))
-                        .Or(Parse.String("Any"))
-                        .Text()
-                        .Token()
-                )
-
+            from t in TypeName
             select t
         ).Optional()
 
@@ -343,12 +631,18 @@ public static class SharpThonParser
 
         from semicolon in Parse.Char(';').Optional()
 
+        let csharpType = GetVariableCSharpType(type)
+        let finalValue = ApplyDeclaredTypeToCollection(
+            type,
+            value.Trim()
+        )
+
         select
             $"{(modifier.IsDefined
                 ? modifier.Get() + " "
                 : "")}" +
-            $"{GetVariableCSharpType(type)} " +
-            $"{name} = {value.Trim()};";
+            $"{csharpType} " +
+            $"{name} = {finalValue};";
 
     // Properties: [public|private|protected] [static] Name -> Type {
     public static readonly Parser<string> PropertyDecl =
@@ -361,16 +655,7 @@ public static class SharpThonParser
         from staticKw in Parse.String("static").Token().Optional()
         from name in Identifier
         from arrow in Parse.String("->").Token()
-        from type in Parse.String("int")
-            .Or(Parse.String("str"))
-            .Or(Parse.String("bool"))
-            .Or(Parse.String("float"))
-            .Or(Parse.String("double"))
-            .Or(Parse.String("long"))
-            .Or(Parse.String("object"))
-            .Or(Parse.String("Any"))
-            .Text()
-            .Token()
+        from type in TypeName
         select $"{(access.IsDefined ? access.Get() : "public")} " +
             $"{(staticKw.IsDefined ? "static " : "")}" +
             $"{(type == "str" ? "string" : type == "Any" ? "object" : type)} " +
@@ -468,16 +753,7 @@ public static class SharpThonParser
             from type in (
                 from colon in Parse.Char(':').Token()
 
-                from t in Parse.String("int")
-                    .Or(Parse.String("str"))
-                    .Or(Parse.String("bool"))
-                    .Or(Parse.String("float"))
-                    .Or(Parse.String("double"))
-                    .Or(Parse.String("long"))
-                    .Or(Parse.String("object"))
-                    .Or(Parse.String("Any"))
-                    .Text()
-                    .Token()
+                from t in TypeName
 
                 select t
             ).Optional()
@@ -503,18 +779,7 @@ public static class SharpThonParser
         from returnType in (
             from arrow in Parse.String("->").Token()
 
-            from t in Parse.String("int")
-                .Or(Parse.String("str"))
-                .Or(Parse.String("bool"))
-                .Or(Parse.String("float"))
-                .Or(Parse.String("double"))
-                .Or(Parse.String("long"))
-                .Or(Parse.String("object"))
-                .Or(Parse.String("void"))
-                .Or(Parse.String("None"))
-                .Or(Parse.String("Any"))
-                .Text()
-                .Token()
+            from t in TypeName
 
             select t
         ).Optional()

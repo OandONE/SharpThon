@@ -1,0 +1,35 @@
+def run() {
+    Write("[Generics]")
+
+    numbers: List<int> = [1, 2, 3, 4, 5]
+    Write(numbers[0])
+    Write(numbers[4])
+
+    names: List<string> = ["Ali", "Mamad", "Reza"]
+    Write(names[1])
+
+    scores: Dictionary<string, int> = {
+        "ali": 16,
+        "mamad": 20
+    }
+
+    Write(scores["ali"])
+
+    scores["ali"] = 17
+    Write(scores["ali"])
+
+    matrix: List<List<int>> = [
+        [1, 2],
+        [3, 4]
+    ]
+
+    Write(matrix[1][1])
+
+    nested: Dictionary<string, List<int>> = {
+        "numbers": [10, 20, 30]
+    }
+
+    Write(nested["numbers"][1])
+
+    Write("[Generics Passed]")
+}

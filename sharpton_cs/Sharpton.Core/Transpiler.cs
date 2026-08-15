@@ -462,6 +462,23 @@ public class Transpiler
 
             code = code.Trim();
 
+            if (IsMultilineDictionaryStart(code))
+            {
+                code = CollectMultilineDictionary(
+                    code,
+                    sourceLines,
+                    ref lineNumber
+                );
+            }
+            else if (IsMultilineListStart(code))
+            {
+                code = CollectMultilineList(
+                    code,
+                    sourceLines,
+                    ref lineNumber
+                );
+            }
+
             // ------------------------------------------------------------
             // Block-style async syntax
             //
@@ -1644,5 +1661,82 @@ public class Transpiler
         }
 
         return string.Join("\n", result);
+    }
+
+    private static bool IsMultilineListStart(string code)
+    {
+        return Regex.IsMatch(
+            code,
+            @"^[A-Za-z_][A-Za-z0-9_]*\s*(?::\s*[^=]+)?\s*=\s*\[\s*$"
+        );
+    }
+
+    private static string CollectMultilineList(
+        string firstLine,
+        string[] sourceLines,
+        ref int lineNumber)
+    {
+        var lines = new List<string>
+        {
+            firstLine.Trim()
+        };
+
+        var bracketDepth = CountBraces(firstLine, '[')
+                         - CountBraces(firstLine, ']');
+
+        while (
+            bracketDepth > 0 &&
+            lineNumber + 1 < sourceLines.Length
+        )
+        {
+            lineNumber++;
+
+            var nextLine = sourceLines[lineNumber];
+            lines.Add(nextLine.Trim());
+
+            bracketDepth += CountBraces(nextLine, '[');
+            bracketDepth -= CountBraces(nextLine, ']');
+        }
+
+        return string.Join(" ", lines);
+    }
+
+    private static bool IsMultilineDictionaryStart(string code)
+    {
+        return Regex.IsMatch(
+            code,
+            @"^[A-Za-z_][A-Za-z0-9_]*\s*(?::\s*[^=]+)?\s*=\s*\{\s*$"
+        );
+    }
+    
+    private static string CollectMultilineDictionary(
+        string firstLine,
+        string[] sourceLines,
+        ref int lineNumber)
+    {
+        var lines = new List<string>
+        {
+            firstLine.Trim()
+        };
+
+        var depth = CountBraces(firstLine, '{')
+                - CountBraces(firstLine, '}');
+
+        while (
+            depth > 0 &&
+            lineNumber + 1 < sourceLines.Length
+        )
+        {
+            lineNumber++;
+
+            var nextLine = sourceLines[lineNumber];
+
+            lines.Add(nextLine.Trim());
+
+            depth += CountBraces(nextLine, '{');
+            depth -= CountBraces(nextLine, '}');
+        }
+
+        return string.Join(" ", lines);
     }
 }

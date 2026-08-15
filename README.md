@@ -84,6 +84,7 @@ if (age == 16) {
 * ✅ Lists — array literal syntax `[1, 2, 3]`
 * ✅ Dictionaries — Python-style `{"key": value}` syntax
 * ✅ Error context display — shows the exact source line with each error
+* ✅ Full Generics — `List<T>`, `Dictionary<K, V>`, nested generics
 
 ---
 
@@ -625,6 +626,38 @@ Write(scores["Ali"])
 config["port"] = 9090
 ```
 
+### Generics
+
+SharpThon supports full generics with C#-style type parameters:
+
+```spy
+// Lists
+numbers: List<int> = [1, 2, 3]
+names: List<string> = ["Ali", "Mamad"]
+
+// Dictionaries
+ages: Dictionary<string, int> = {
+    "ali": 16,
+    "mamad": 20
+}
+
+// Nested generics
+matrix: List<List<int>> = [
+    [1, 2],
+    [3, 4]
+]
+
+// Complex types
+nested: Dictionary<string, List<int>> = {
+    "numbers": [10, 20, 30]
+}
+```
+
+Generic types map directly to C#:
+- `List<T>` → `List<T>`
+- `Dictionary<K, V>` → `Dictionary<K, V>`
+- Nested generics work as expected
+
 ### CI/CD
 
 Every push to GitHub automatically runs build and tests via GitHub Actions.
@@ -699,9 +732,9 @@ SharpThon/
 | CI/CD                                           | ✅ Complete |
 | Inheritance                                     | ✅ Complete |
 | Dictionaries & List Support                     | ✅ Complete |
+| Generics                                        | ✅ Complete |
 | VS Code Extension (LSP)                        | 🚧 In Progress |
 | Interfaces                                      | ❌          |
-| Generics                                        | ❌          |
 | Self-hosting                                    | ❌          |
 | NuGet package                                   | ❌          |
 
