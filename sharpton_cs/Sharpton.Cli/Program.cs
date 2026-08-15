@@ -178,6 +178,7 @@ try
             {
                 int sharpThonLine = sourceLineNumbers[csLine - 1];
 
+                Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine();
                 Console.WriteLine("=== SharpThon Error ===");
                 Console.WriteLine();
@@ -199,6 +200,7 @@ try
                 Console.WriteLine();
                 Console.WriteLine("=======================");
                 Console.WriteLine();
+                Console.ResetColor();
             }
         }
     }

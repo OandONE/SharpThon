@@ -83,6 +83,7 @@ if (age == 16) {
 * ✅ Inheritance — class `:` parent syntax
 * ✅ Lists — array literal syntax `[1, 2, 3]`
 * ✅ Dictionaries — Python-style `{"key": value}` syntax
+* ✅ Error context display — shows the exact source line with each error
 
 ---
 
@@ -524,6 +525,7 @@ When an error occurs, SharpThon displays:
 - 📍 **Line number** where the error happened
 - 💬 **A clear error description**
 - 🏷️ **The C# error type** (for advanced users)
+- 📝 **The actual source code line** where the error occurred
 
 **Compile-time error example:**
 
@@ -566,6 +568,24 @@ System.DivideByZeroException: Attempted to divide by zero.
 ```
 
 This makes debugging much easier, especially for developers coming from Python who are used to simple, direct error messages.
+
+### Error Context Display
+
+SharpThon now shows the actual source code line along with the error, not just the line number.
+
+**Example:**
+
+```
+File: ../_test_error.spy
+Line: 8
+
+  8 |         "name": "Ali"
+
+} expected
+C# Error: CS1513
+```
+
+This makes debugging much easier — you can see exactly which line caused the error without opening the file.
 
 ### C-style For Loops
 
