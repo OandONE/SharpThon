@@ -193,18 +193,6 @@ try
                 Console.WriteLine();
                 Console.WriteLine(errorMessage);
 
-                Console.WriteLine($"File: {filepath}");
-                Console.WriteLine($"Line: {sharpThonLine}");
-
-                if (sharpThonLine >= 1 && sharpThonLine <= sourceLines.Length)
-                {
-                    Console.WriteLine();
-                    Console.WriteLine($"  {sharpThonLine} | {sourceLines[sharpThonLine - 1]}");
-                }
-
-                Console.WriteLine();
-                Console.WriteLine(errorMessage);
-
                 if (!string.IsNullOrEmpty(errorCode))
                     Console.WriteLine($"C# Error: {errorCode}");
 
