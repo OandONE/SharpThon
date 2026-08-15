@@ -52,7 +52,7 @@ if (age == 16) {
 ## ✨ Features
 
 * ✅ Python-like syntax — familiar, readable
-* ✅ C# target — transpiles to clean, idiomatic C#
+* ✅ C# target — transpiles to C# that can directly participate in the .NET ecosystem
 * ✅ Sprache Parser — clean C#, minimal Regex, no external tools
 * ✅ Optional type hints — `x = 10` or `x: int = 10`
 * ✅ Numeric types — `int`, `long`, `float`, `double`
@@ -67,6 +67,8 @@ if (age == 16) {
 * ✅ Comments — supports `#` and preserves inline `//` comments
 * ✅ Module imports — import other `.spy` files as modules
 * ✅ `using` — import .NET namespaces
+* ✅ .NET namespace imports
+* ✅ C#/.NET interoperability
 * ✅ String interpolation — `f"Hello {name}"` → `$"Hello {name}"`
 * ✅ `try/catch/finally` — supports exception types and aliases
 * ✅ Async tasks — `go` and `await go` for simple asynchronous execution
@@ -88,26 +90,29 @@ if (age == 16) {
 
 ### Future Goals
 
-* ASP.NET Core support
-* EF Core integration
+* Full C# / .NET interoperability
 * Interfaces
 * Generics
+* Advanced C# type support
+* External .NET library support
+* NuGet package support
 * Self-hosting compiler
 
-SharpThon aims to become a complete .NET development language while keeping a familiar, lightweight syntax.
+SharpThon aims to become a lightweight .NET development language
+that can directly interoperate with the existing C# and .NET ecosystem.
+
+SharpThon does not need to understand or implement frameworks such as
+ASP.NET Core or Entity Framework Core directly. Instead, it aims to
+generate C# that can consume any compatible .NET library through normal
+using directives, types, methods, generics, and APIs.
 
 ```spy
-// ASP.NET Core
-class HomeController {
-    public def Index() -> IActionResult {
-        return View("Index", 50)
-    }
-}
+using SomeDotNetLibrary
 
-// EF Core
-class User : DbContext {
-    public int Id { get; set; }
-    public string Name { get; set; }
+class UserService {
+    public def GetUser(id: int) {
+        return UserRepository.Find(id)
+    }
 }
 ```
 
@@ -673,11 +678,10 @@ SharpThon/
 | Async tasks (`go {...}` / `await go {...}`)     | ✅ Complete |
 | CI/CD                                           | ✅ Complete |
 | Inheritance                                     | ✅ Complete |
+| Dictionaries & List Support                     | ✅ Complete |
 | VS Code Extension (LSP)                        | 🚧 In Progress |
 | Interfaces                                      | ❌          |
 | Generics                                        | ❌          |
-| ASP.NET Core support                            | ❌          |
-| EF Core support                                 | ❌          |
 | Self-hosting                                    | ❌          |
 | NuGet package                                   | ❌          |
 
