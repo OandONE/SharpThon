@@ -458,17 +458,7 @@ public class Transpiler
         {
             var line = sourceLines[lineNumber];
 
-            var index = line.IndexOf("//");
-
-            string comment =
-                index >= 0
-                    ? line[index..]
-                    : "";
-
-            string code =
-                index >= 0
-                    ? line[..index]
-                    : line;
+            var (code, comment) = SplitSharpThonComment(line);
 
             code = code.Trim();
 
@@ -532,21 +522,10 @@ public class Transpiler
                     lineNumber < sourceLines.Length
                 )
                 {
-                    var blockLine =
-                        sourceLines[lineNumber];
+                    var blockLine = sourceLines[lineNumber];
 
-                    var blockCommentIndex =
-                        blockLine.IndexOf("//");
-
-                    string blockComment =
-                        blockCommentIndex >= 0
-                            ? blockLine[blockCommentIndex..]
-                            : "";
-
-                    string blockCode =
-                        blockCommentIndex >= 0
-                            ? blockLine[..blockCommentIndex]
-                            : blockLine;
+                    var (blockCode, blockComment) =
+                        SplitSharpThonComment(blockLine);
 
                     blockCode = blockCode.Trim();
 
@@ -1551,5 +1530,69 @@ public class Transpiler
         );
 
         return code;
+    }
+
+    private static (string Code, string Comment) SplitSharpThonComment(
+        string line)
+    {
+        bool inString = false;
+        char stringQuote = '\0';
+        bool escaped = false;
+
+        for (int i = 0; i < line.Length; i++)
+        {
+            char c = line[i];
+
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (c == '\\' && inString)
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (inString)
+            {
+                if (c == stringQuote)
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (c == '"' || c == '\'')
+            {
+                inString = true;
+                stringQuote = c;
+                continue;
+            }
+
+            // Python/SharpThon style comment
+            if (c == '#')
+            {
+                return (
+                    line[..i],
+                    "//" + line[i..]
+                );
+            }
+
+            // C# style comment
+            if (c == '/' &&
+                i + 1 < line.Length &&
+                line[i + 1] == '/')
+            {
+                return (
+                    line[..i],
+                    line[i..]
+                );
+            }
+        }
+
+        return (line, "");
     }
 }

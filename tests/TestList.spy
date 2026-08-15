@@ -1,5 +1,5 @@
 def run() {
     names = ["mamad", "sam"]
 
-    Write(names[0])
+    Write(names[0]) # out: mamad
 }
