@@ -88,7 +88,6 @@ if (age == 16) {
 
 * ASP.NET Core support
 * EF Core integration
-* Inheritance
 * Interfaces
 * Generics
 * Self-hosting compiler
