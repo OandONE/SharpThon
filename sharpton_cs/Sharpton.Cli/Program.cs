@@ -57,6 +57,8 @@ catch (SharpThonImportException exception)
 var csCode = transpileResult.Code;
 var sourceLineNumbers = transpileResult.SourceLineNumbers;
 
+var sourceLines = File.ReadAllLines(filepath);
+
 var outputDir = Path.Combine(
     Path.GetDirectoryName(filepath)!,
     "__sharpthon__"
@@ -148,6 +150,9 @@ try
                 continue;
 
             int csLine = int.Parse(match.Groups[1].Value);
+
+            var generatedLines = csCode.Split('\n');
+
             string errorMessage = match.Groups[3].Value;
 
             // Remove project/file path from the C# error
@@ -178,6 +183,25 @@ try
                 Console.WriteLine();
                 Console.WriteLine($"File: {filepath}");
                 Console.WriteLine($"Line: {sharpThonLine}");
+
+                if (sharpThonLine >= 1 && sharpThonLine <= sourceLines.Length)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine($"  {sharpThonLine} | {sourceLines[sharpThonLine - 1]}");
+                }
+
+                Console.WriteLine();
+                Console.WriteLine(errorMessage);
+
+                Console.WriteLine($"File: {filepath}");
+                Console.WriteLine($"Line: {sharpThonLine}");
+
+                if (sharpThonLine >= 1 && sharpThonLine <= sourceLines.Length)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine($"  {sharpThonLine} | {sourceLines[sharpThonLine - 1]}");
+                }
+
                 Console.WriteLine();
                 Console.WriteLine(errorMessage);
 
