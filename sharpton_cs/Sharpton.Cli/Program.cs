@@ -103,7 +103,14 @@ var projectFile = """
 """;
 
 File.WriteAllText(tempProject, projectFile);
-File.WriteAllText(tempProgram, csCode);
+File.WriteAllText(
+    tempProgram,
+    BuildMappedCSharp(
+        csCode,
+        sourceLineNumbers,
+        filepath
+    )
+);
 
 try
 {
@@ -143,24 +150,21 @@ try
 
             var match = System.Text.RegularExpressions.Regex.Match(
                 errorLine,
-                @"Program\.cs\((\d+),(\d+)\): error (.+)"
+                @"^(?<file>.+?)\((?<line>\d+),(?<column>\d+)\): error (?<error>.+)$"
             );
 
             if (!match.Success)
                 continue;
 
-            int csLine = int.Parse(match.Groups[1].Value);
+            int reportedLine = int.Parse(match.Groups["line"].Value);
+            int reportedColumn = int.Parse(match.Groups["column"].Value);
+            string reportedFile = match.Groups["file"].Value;
+            string errorMessage = match.Groups["error"].Value;
 
-            var generatedLines = csCode.Split('\n');
-
-            string errorMessage = match.Groups[3].Value;
-
-            // Remove project/file path from the C# error
             int bracketIndex = errorMessage.IndexOf(" [");
             if (bracketIndex >= 0)
                 errorMessage = errorMessage[..bracketIndex];
 
-            // Extract error code
             string errorCode = "";
 
             var codeMatch = System.Text.RegularExpressions.Regex.Match(
@@ -174,40 +178,56 @@ try
                 errorMessage = codeMatch.Groups[2].Value;
             }
 
-            if (csLine >= 1 && csLine <= sourceLineNumbers.Count)
+            int sharpThonLine;
+
+            bool pointsToSource =
+                PathsReferToSameFile(reportedFile, filepath);
+
+            if (pointsToSource)
             {
-                int sharpThonLine = sourceLineNumbers[csLine - 1];
-
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine();
-                Console.WriteLine("=== SharpThon Error ===");
-                Console.WriteLine();
-                Console.WriteLine($"File: {filepath}");
-                Console.WriteLine($"Line: {sharpThonLine}");
-
-                PrintSourceLink(
-                    filepath,
-                    sharpThonLine,
-                    int.Parse(match.Groups[2].Value)
-                );
-
-                if (sharpThonLine >= 1 && sharpThonLine <= sourceLines.Length)
-                {
-                    Console.WriteLine();
-                    Console.WriteLine($"  {sharpThonLine} | {sourceLines[sharpThonLine - 1]}");
-                }
-
-                Console.WriteLine();
-                Console.WriteLine(errorMessage);
-
-                if (!string.IsNullOrEmpty(errorCode))
-                    Console.WriteLine($"C# Error: {errorCode}");
-
-                Console.WriteLine();
-                Console.WriteLine("=======================");
-                Console.WriteLine();
-                Console.ResetColor();
+                sharpThonLine = reportedLine;
             }
+            else if (reportedLine >= 1 &&
+                     reportedLine <= sourceLineNumbers.Count)
+            {
+                sharpThonLine = sourceLineNumbers[reportedLine - 1];
+            }
+            else
+            {
+                continue;
+            }
+
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine();
+            Console.WriteLine("=== SharpThon Error ===");
+            Console.WriteLine();
+            Console.WriteLine($"File: {filepath}");
+            Console.WriteLine($"Line: {sharpThonLine}");
+
+            PrintSourceLink(
+                filepath,
+                sharpThonLine,
+                reportedColumn
+            );
+
+            if (sharpThonLine >= 1 && sharpThonLine <= sourceLines.Length)
+            {
+                Console.WriteLine();
+                Console.WriteLine(
+                    $"  {sharpThonLine} | {sourceLines[sharpThonLine - 1]}"
+                );
+            }
+
+            Console.WriteLine();
+            Console.WriteLine(errorMessage);
+
+            if (!string.IsNullOrEmpty(errorCode))
+                Console.WriteLine($"C# Error: {errorCode}");
+
+            Console.WriteLine();
+            Console.WriteLine("=======================");
+            Console.WriteLine();
+            Console.ResetColor();
         }
     }
 
@@ -253,22 +273,40 @@ static void PrintRuntimeError(
         return;
     }
 
-    var generatedLineMatch =
-        System.Text.RegularExpressions.Regex.Match(
-            standardError,
-            @"Program\.cs:line\s+(?<line>\d+)"
-        );
-
     int? sharpThonLine = null;
 
-    if (generatedLineMatch.Success &&
+    var sourceStackMatch =
+        System.Text.RegularExpressions.Regex.Match(
+            standardError,
+            @"(?<file>[^\r\n:]+\.spy):line\s+(?<line>\d+)"
+        );
+
+    if (sourceStackMatch.Success &&
         int.TryParse(
-            generatedLineMatch.Groups["line"].Value,
-            out var generatedLine) &&
-        generatedLine >= 1 &&
-        generatedLine <= sourceLineNumbers.Count)
+            sourceStackMatch.Groups["line"].Value,
+            out var sourceLine
+        ))
     {
-        sharpThonLine = sourceLineNumbers[generatedLine - 1];
+        sharpThonLine = sourceLine;
+    }
+    else
+    {
+        var generatedLineMatch =
+            System.Text.RegularExpressions.Regex.Match(
+                standardError,
+                @"Program\.cs:line\s+(?<line>\d+)"
+            );
+
+        if (generatedLineMatch.Success &&
+            int.TryParse(
+                generatedLineMatch.Groups["line"].Value,
+                out var generatedLine
+            ) &&
+            generatedLine >= 1 &&
+            generatedLine <= sourceLineNumbers.Count)
+        {
+            sharpThonLine = sourceLineNumbers[generatedLine - 1];
+        }
     }
 
     var exceptionType = exceptionMatch.Groups["type"].Value;
@@ -280,31 +318,15 @@ static void PrintRuntimeError(
     Console.WriteLine();
     Console.WriteLine($"{orange}=== SharpThon Runtime Error ==={reset}");
     Console.WriteLine();
-
     Console.WriteLine($"{orange}File: {sourceFile}{reset}");
 
     if (sharpThonLine.HasValue)
     {
-        Console.WriteLine(
-            $"{orange}Line: {sharpThonLine.Value}{reset}"
-        );
+        Console.WriteLine($"{orange}Line: {sharpThonLine.Value}{reset}");
+        PrintSourceLink(sourceFile, sharpThonLine.Value);
 
-        var absolutePath = Path.GetFullPath(sourceFile);
-
-        var vscodeUri =
-            $"vscode://file{absolutePath}:{sharpThonLine.Value}:1";
-
-        var link =
-            $"\x1b]8;;{vscodeUri}\x1b\\" +
-            $"🔗 Open source line {sharpThonLine.Value}" +
-            $"\x1b]8;;\x1b\\";
-
-        Console.WriteLine(link);
-
-        if (
-            sharpThonLine.Value >= 1 &&
-            sharpThonLine.Value <= sourceLines.Count
-        )
+        if (sharpThonLine.Value >= 1 &&
+            sharpThonLine.Value <= sourceLines.Count)
         {
             Console.WriteLine();
             Console.WriteLine(
@@ -319,7 +341,6 @@ static void PrintRuntimeError(
     }
 
     Console.WriteLine();
-
     Console.WriteLine(
         $"{orange}" +
         (string.IsNullOrEmpty(exceptionMessage)
@@ -327,10 +348,59 @@ static void PrintRuntimeError(
             : $"{exceptionType}: {exceptionMessage}") +
         $"{reset}"
     );
-
     Console.WriteLine();
     Console.WriteLine($"{orange}==============================={reset}");
     Console.WriteLine();
+}
+
+static string BuildMappedCSharp(
+    string csCode,
+    IReadOnlyList<int> sourceLineNumbers,
+    string sourceFile)
+{
+    var lines = csCode.Split('\n');
+    var escapedPath =
+        Path.GetFullPath(sourceFile)
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"");
+
+    var builder = new System.Text.StringBuilder();
+
+    for (int i = 0; i < lines.Length; i++)
+    {
+        var sourceLine =
+            i < sourceLineNumbers.Count
+                ? sourceLineNumbers[i]
+                : 1;
+
+        builder.AppendLine(
+            $"#line {sourceLine} \"{escapedPath}\""
+        );
+        builder.AppendLine(lines[i]);
+    }
+
+    builder.AppendLine("#line default");
+    return builder.ToString();
+}
+
+static bool PathsReferToSameFile(
+    string reportedFile,
+    string sourceFile)
+{
+    try
+    {
+        return string.Equals(
+            Path.GetFullPath(reportedFile.Trim()),
+            Path.GetFullPath(sourceFile),
+            OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal
+        );
+    }
+    catch
+    {
+        return false;
+    }
 }
 
 static void PrintSourceLink(
