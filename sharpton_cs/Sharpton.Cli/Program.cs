@@ -216,7 +216,8 @@ try
         PrintRuntimeError(
             errors,
             filepath,
-            sourceLineNumbers
+            sourceLineNumbers,
+            sourceLines
         );
     }
 
@@ -237,7 +238,8 @@ finally
 static void PrintRuntimeError(
     string standardError,
     string sourceFile,
-    IReadOnlyList<int> sourceLineNumbers)
+    IReadOnlyList<int> sourceLineNumbers,
+    IReadOnlyList<string> sourceLines)
 {
     var exceptionMatch =
         System.Text.RegularExpressions.Regex.Match(
@@ -247,7 +249,6 @@ static void PrintRuntimeError(
 
     if (!exceptionMatch.Success)
     {
-        // Preserve stderr that does not represent an unhandled exception.
         Console.Error.WriteLine(standardError.TrimEnd());
         return;
     }
@@ -273,23 +274,62 @@ static void PrintRuntimeError(
     var exceptionType = exceptionMatch.Groups["type"].Value;
     var exceptionMessage = exceptionMatch.Groups["message"].Value.Trim();
 
+    const string orange = "\x1b[1;38;2;255;165;0m";
+    const string reset = "\x1b[0m";
+
     Console.WriteLine();
-    Console.WriteLine("=== SharpThon Runtime Error ===");
+    Console.WriteLine($"{orange}=== SharpThon Runtime Error ==={reset}");
     Console.WriteLine();
-    Console.WriteLine($"File: {sourceFile}");
+
+    Console.WriteLine($"{orange}File: {sourceFile}{reset}");
+
+    if (sharpThonLine.HasValue)
+    {
+        Console.WriteLine(
+            $"{orange}Line: {sharpThonLine.Value}{reset}"
+        );
+
+        var absolutePath = Path.GetFullPath(sourceFile);
+
+        var vscodeUri =
+            $"vscode://file{absolutePath}:{sharpThonLine.Value}:1";
+
+        var link =
+            $"\x1b]8;;{vscodeUri}\x1b\\" +
+            $"🔗 Open source line {sharpThonLine.Value}" +
+            $"\x1b]8;;\x1b\\";
+
+        Console.WriteLine(link);
+
+        if (
+            sharpThonLine.Value >= 1 &&
+            sharpThonLine.Value <= sourceLines.Count
+        )
+        {
+            Console.WriteLine();
+            Console.WriteLine(
+                $"{orange}  {sharpThonLine.Value} | " +
+                $"{sourceLines[sharpThonLine.Value - 1]}{reset}"
+            );
+        }
+    }
+    else
+    {
+        Console.WriteLine($"{orange}Line: Unknown{reset}");
+    }
+
+    Console.WriteLine();
+
     Console.WriteLine(
-        sharpThonLine.HasValue
-            ? $"Line: {sharpThonLine.Value}"
-            : "Line: Unknown"
-    );
-    Console.WriteLine();
-    Console.WriteLine(
-        string.IsNullOrEmpty(exceptionMessage)
+        $"{orange}" +
+        (string.IsNullOrEmpty(exceptionMessage)
             ? exceptionType
-            : $"{exceptionType}: {exceptionMessage}"
+            : $"{exceptionType}: {exceptionMessage}") +
+        $"{reset}"
     );
+
     Console.WriteLine();
-    Console.WriteLine("===============================");
+    Console.WriteLine($"{orange}==============================={reset}");
     Console.WriteLine();
 }
 
