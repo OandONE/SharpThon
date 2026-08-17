@@ -185,6 +185,12 @@ try
                 Console.WriteLine($"File: {filepath}");
                 Console.WriteLine($"Line: {sharpThonLine}");
 
+                PrintSourceLink(
+                    filepath,
+                    sharpThonLine,
+                    int.Parse(match.Groups[2].Value)
+                );
+
                 if (sharpThonLine >= 1 && sharpThonLine <= sourceLines.Length)
                 {
                     Console.WriteLine();
@@ -285,4 +291,21 @@ static void PrintRuntimeError(
     Console.WriteLine();
     Console.WriteLine("===============================");
     Console.WriteLine();
+}
+
+static void PrintSourceLink(
+    string sourceFile,
+    int line,
+    int column = 1)
+{
+    var absolutePath = Path.GetFullPath(sourceFile);
+
+    var uri =
+        $"vscode://file/{Uri.EscapeDataString(absolutePath)}:{line}:{column}";
+
+    Console.WriteLine(
+        $"\u001b]8;;{uri}\u0007" +
+        $"🔗 Open source line {line}" +
+        $"\u001b]8;;\u0007"
+    );
 }

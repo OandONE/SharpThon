@@ -479,7 +479,6 @@ public class Transpiler
                 );
             }
 
-            // ------------------------------------------------------------
             // Block-style async syntax
             //
             // go {
@@ -494,7 +493,6 @@ public class Transpiler
             //
             // go command
             // await go command
-            // ------------------------------------------------------------
 
             if (
                 code == "go {" ||
@@ -546,9 +544,7 @@ public class Transpiler
 
                     blockCode = blockCode.Trim();
 
-                    // ----------------------------------------------------
                     // Empty line
-                    // ----------------------------------------------------
 
                     if (string.IsNullOrEmpty(blockCode))
                     {
@@ -562,9 +558,7 @@ public class Transpiler
                         continue;
                     }
 
-                    // ----------------------------------------------------
                     // Count braces BEFORE parsing the line.
-                    // ----------------------------------------------------
 
                     int opens =
                         CountBraces(
@@ -578,12 +572,10 @@ public class Transpiler
                             '}'
                         );
 
-                    // ----------------------------------------------------
                     // If we are at the outermost level and this line is
                     // the closing brace of the go block, stop here.
                     //
                     // Do NOT send this `}` to the SharpThon parser.
-                    // ----------------------------------------------------
 
                     if (
                         blockDepth == 1 &&
@@ -593,9 +585,7 @@ public class Transpiler
                         break;
                     }
 
-                    // ----------------------------------------------------
                     // Handle variable scopes before parsing.
-                    // ----------------------------------------------------
 
                     CloseVariableScopes(
                         variableScopes,
@@ -609,9 +599,7 @@ public class Transpiler
                                 blockCode
                             );
 
-                        // ------------------------------------------------
                         // Constructor handling
-                        // ------------------------------------------------
 
                         if (
                             currentClass != null &&
@@ -627,9 +615,7 @@ public class Transpiler
                                 );
                         }
 
-                        // ------------------------------------------------
                         // Function return type inference
-                        // ------------------------------------------------
 
                         if (
                             IsFunctionDeclaration(
@@ -650,9 +636,7 @@ public class Transpiler
                                 );
                         }
 
-                        // ------------------------------------------------
                         // Variable declaration / assignment handling
-                        // ------------------------------------------------
 
                         innerResult =
                             NormalizeVariableStatement(
@@ -661,9 +645,7 @@ public class Transpiler
                                 variableScopes
                             );
 
-                        // ------------------------------------------------
                         // Object construction
-                        // ------------------------------------------------
 
                         innerResult =
                             AddImplicitConstructorKeyword(
@@ -672,9 +654,7 @@ public class Transpiler
                                 declaredClasses
                             );
 
-                        // ------------------------------------------------
                         // Preserve inline comments
-                        // ------------------------------------------------
 
                         if (
                             !string.IsNullOrEmpty(
@@ -692,9 +672,7 @@ public class Transpiler
                             lineNumber + 1
                         );
 
-                        // ------------------------------------------------
                         // Open variable scopes after processing `{`.
-                        // ------------------------------------------------
 
                         OpenVariableScopes(
                             variableScopes,
@@ -719,9 +697,7 @@ public class Transpiler
                         );
                     }
 
-                    // ----------------------------------------------------
                     // Update block depth AFTER processing the current line.
-                    // ----------------------------------------------------
 
                     blockDepth += opens;
                     blockDepth -= closes;
@@ -729,12 +705,10 @@ public class Transpiler
                     lineNumber++;
                 }
 
-                // --------------------------------------------------------
                 // The closing `}` of the go block is currently sitting
                 // at sourceLines[lineNumber].
                 //
                 // Consume it and emit the closing C# Task.Run syntax.
-                // --------------------------------------------------------
 
                 if (
                     lineNumber < sourceLines.Length &&
@@ -772,9 +746,7 @@ public class Transpiler
                 continue;
             }
 
-            // ------------------------------------------------------------
             // Normal empty line
-            // ------------------------------------------------------------
 
             if (string.IsNullOrEmpty(code))
             {
@@ -787,7 +759,6 @@ public class Transpiler
                 continue;
             }
 
-            // ------------------------------------------------------------
             // Close scopes before resolving the current line.
             //
             // This allows both:
@@ -799,16 +770,13 @@ public class Transpiler
             // } else {
             //
             // to behave correctly.
-            // ------------------------------------------------------------
 
             CloseVariableScopes(
                 variableScopes,
                 code
             );
 
-            // ------------------------------------------------------------
             // Class declaration
-            // ------------------------------------------------------------
 
             if (code.StartsWith("class "))
             {
@@ -831,9 +799,7 @@ public class Transpiler
                         code
                     );
 
-                // --------------------------------------------------------
                 // Constructor handling
-                // --------------------------------------------------------
 
                 if (
                     currentClass != null &&
@@ -849,9 +815,7 @@ public class Transpiler
                         );
                 }
 
-                // --------------------------------------------------------
                 // Function return type inference
-                // --------------------------------------------------------
 
                 if (
                     IsFunctionDeclaration(code)
@@ -870,9 +834,7 @@ public class Transpiler
                         );
                 }
 
-                // --------------------------------------------------------
                 // Variable declarations / assignments
-                // --------------------------------------------------------
 
                 result =
                     NormalizeVariableStatement(
@@ -881,9 +843,7 @@ public class Transpiler
                         variableScopes
                     );
 
-                // --------------------------------------------------------
                 // Object construction
-                // --------------------------------------------------------
 
                 result =
                     AddImplicitConstructorKeyword(
@@ -892,9 +852,7 @@ public class Transpiler
                         declaredClasses
                     );
 
-                // --------------------------------------------------------
                 // Preserve inline comments
-                // --------------------------------------------------------
 
                 if (
                     !string.IsNullOrEmpty(comment)
@@ -910,9 +868,7 @@ public class Transpiler
                     lineNumber + 1
                 );
 
-                // --------------------------------------------------------
                 // Open a scope after processing the line containing `{`.
-                // --------------------------------------------------------
 
                 OpenVariableScopes(
                     variableScopes,
@@ -939,9 +895,7 @@ public class Transpiler
             }
         }
 
-        // ------------------------------------------------------------
         // Format final C# output.
-        // ------------------------------------------------------------
 
         var formatted =
             FormatResults(
