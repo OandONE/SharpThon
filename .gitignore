@@ -25,3 +25,7 @@ Thumbs.db
 # Test Temps
 _*.spy
 my_package/
+
+# Old Files
+_*.png
+_*.svg
