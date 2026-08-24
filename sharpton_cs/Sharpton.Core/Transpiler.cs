@@ -1003,7 +1003,13 @@ public class Transpiler
     {
         return Regex.IsMatch(
             code,
-            @"^[A-Za-z_][A-Za-z0-9_]*\s*:\s*[A-Za-z_][A-Za-z0-9_]*\s*=|^(?:public|private|protected)\s+[A-Za-z_][A-Za-z0-9_]*\s+[^=]+\s*="
+            @"^[A-Za-z_][A-Za-z0-9_]*\s*:\s*[A-Za-z_][A-Za-z0-9_]*\s*="
+        ) || Regex.IsMatch(
+            code,
+            @"^(?:public|private|protected|const|readonly)\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*:\s*[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)\s*="
+        ) || Regex.IsMatch(
+            code,
+            @"^(?:public|private|protected)\s+(?:const|readonly)\s+[A-Za-z_][A-Za-z0-9_]*\s*(?::\s*[A-Za-z_][A-Za-z0-9_]*)?\s*="
         ) || Regex.IsMatch(
             code,
             @"^(?:int|string|str|bool|float|double|long|object|Any)\s+[A-Za-z_][A-Za-z0-9_]*\s*="
@@ -1014,7 +1020,7 @@ public class Transpiler
     {
         var match = Regex.Match(
             code,
-            @"^(?:(?:public|private|protected)\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\s*:\s*[A-Za-z_][A-Za-z0-9_]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*="
+            @"^(?:(?:public|private|protected)\s+(?:const|readonly)\s+|(?:public|private|protected|const|readonly)\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\s*:\s*[A-Za-z_][A-Za-z0-9_]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*="
         );
 
         return match.Success ? match.Groups[1].Value : null;

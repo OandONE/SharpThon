@@ -71,13 +71,72 @@ public static class SharpThonParser
     }
 
     private static string GetVariableCSharpType(
-        IOption<string> type)
+        IOption<string> type,
+        IEnumerable<string> modifiers,
+        string value)
     {
-        if (!type.IsDefined)
-            return "var";
+        if (type.IsDefined)
+            return type.Get();
 
-        return type.Get();
+        if (modifiers.Any(m => m == "const" || m == "readonly"))
+            return InferVariableTypeFromValue(value);
+
+        return "var";
     }
+
+    private static string InferVariableTypeFromValue(string value)
+    {
+        value = value.Trim();
+
+        if (value.Length >= 2 &&
+            value.StartsWith("\"") &&
+            value.EndsWith("\""))
+        {
+            return "string";
+        }
+
+        if (value == "true" || value == "false")
+            return "bool";
+
+        if (Regex.IsMatch(value, @"^-?\d+$"))
+            return "int";
+
+        if (Regex.IsMatch(value, @"^-?\d+\.\d+[fF]?$"))
+        {
+            return value.EndsWith(
+                "f",
+                StringComparison.OrdinalIgnoreCase
+            )
+                ? "float"
+                : "double";
+        }
+
+        return "object";
+    }
+
+    private static readonly Parser<string> AccessModifier =
+        Parse.String("public")
+            .Or(Parse.String("private"))
+            .Or(Parse.String("protected"))
+            .Text()
+            .Token();
+
+    private static readonly Parser<string> ConstModifier =
+        Parse.String("const").Text().Token();
+
+    private static readonly Parser<string> ReadonlyModifier =
+        Parse.String("readonly").Text().Token();
+
+    private static readonly Parser<IEnumerable<string>> VariableModifiers =
+        from access in AccessModifier.Optional()
+        from constKw in ConstModifier.Optional()
+        from readonlyKw in ReadonlyModifier.Optional()
+        select new[]
+        {
+            access.GetOrElse(""),
+            constKw.IsDefined ? "const" : "",
+            readonlyKw.IsDefined ? "readonly" : ""
+        }.Where(x => !string.IsNullOrEmpty(x));
 
     // Base Tokens
     public static readonly Parser<string> Identifier =
@@ -604,14 +663,7 @@ public static class SharpThonParser
 
     // Variables: x = 10 Or x: int = 10
     public static readonly Parser<string> VariableDecl =
-        from modifier in
-        (
-            Parse.String("public")
-                .Or(Parse.String("private"))
-                .Or(Parse.String("protected"))
-                .Text()
-                .Token()
-        ).Optional()
+        from modifiers in VariableModifiers
 
         from name in Identifier
 
@@ -631,16 +683,22 @@ public static class SharpThonParser
 
         from semicolon in Parse.Char(';').Optional()
 
-        let csharpType = GetVariableCSharpType(type)
+        let rawValue = value.Trim()
+        let csharpType = GetVariableCSharpType(
+            type,
+            modifiers,
+            rawValue
+        )
         let finalValue = ApplyDeclaredTypeToCollection(
             type,
-            value.Trim()
+            rawValue
         )
+        let modifierString = modifiers.Any()
+            ? string.Join(" ", modifiers) + " "
+            : ""
 
         select
-            $"{(modifier.IsDefined
-                ? modifier.Get() + " "
-                : "")}" +
+            $"{modifierString}" +
             $"{csharpType} " +
             $"{name} = {finalValue};";
 

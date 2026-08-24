@@ -55,6 +55,7 @@ if (age == 16) {
 * ✅ C# target — transpiles to C# that can directly participate in the .NET ecosystem
 * ✅ Sprache Parser — clean C#, minimal Regex, no external tools
 * ✅ Optional type hints — `x = 10` or `x: int = 10`
+* ✅ Constants & Readonly — `const MAX = 3`, `readonly _host: str = "localhost"`
 * ✅ Numeric types — `int`, `long`, `float`, `double`
 * ✅ `str` → `string`, `Any` → `object` — seamless C# mapping
 * ✅ Braces `{}` — no more indentation errors
@@ -195,6 +196,40 @@ is_dev = true              // bool
 text: str = "Hello"       // str → string in C#
 data: Any = 42            // Any → object in C#
 ```
+
+### Constants & Readonly
+
+SharpThon supports C#-style `const` and `readonly` modifiers.
+
+```spy
+const MAX_RETRY = 3
+const APP_NAME = "SharpThon"
+const PI: double = 3.14159
+
+class Config {
+    readonly _host: str = "localhost"
+    public readonly Port: int = 8080
+    public const API_URL = "https://api.example.com"
+}
+```
+
+Output C#:
+
+```csharp
+const int MAX_RETRY = 3;
+const string APP_NAME = "SharpThon";
+const double PI = 3.14159;
+
+class Config {
+    readonly string _host = "localhost";
+    public readonly int Port = 8080;
+    public const string API_URL = "https://api.example.com";
+}
+```
+
+- `const` works for local variables and class fields. The type is inferred from the value if not explicitly written.
+- `readonly` is for class fields only (it cannot be used inside functions).
+- You can combine `public`, `private`, `protected` with `const` or `readonly`.
 
 ### Conditions
 
@@ -733,8 +768,14 @@ SharpThon/
 | Inheritance                                     | ✅ Complete |
 | Dictionaries & List Support                     | ✅ Complete |
 | Generics                                        | ✅ Complete |
+| Constants & Readonly                            | ✅ Complete |
 | VS Code Extension (LSP)                        | 🚧 In Progress |
 | Interfaces                                      | ❌          |
+| Python-like names for C# APIs                   | ❌          |
+| LINQ / Lambda expressions                       | ❌          |
+| Official documentation (website, PDF)           | ❌          |
+| Python UX libraries via `using` (e.g., os)      | ❌          |
+| Full `async` / `await` support                  | ❌          |
 | Self-hosting                                    | ❌          |
 | NuGet package                                   | ❌          |
 
