@@ -13,6 +13,7 @@ import TestIndex
 import TestNotCommand
 import TestDictionary
 import TestGenerics
+import TestPythonLikeNames
 
 def main() {
     Write("================================")
@@ -34,6 +35,7 @@ def main() {
     TestNotCommand.run()
     TestDictionary.run()
     TestGenerics.run()
+    TestPythonLikeNames.run()
 
     Write("================================")
     Write("        ALL TESTS PASSED")

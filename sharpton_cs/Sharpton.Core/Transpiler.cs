@@ -64,6 +64,8 @@ public class Transpiler
     // can detect a back edge, while this list lets us report the full cycle.
     private readonly List<string> importPath = new();
 
+    private readonly HashSet<string> _userDefinedFunctions = new(StringComparer.Ordinal);
+
     public string TranspileFile(string filepath)
     {
         sourceDirectory = Path.GetDirectoryName(
@@ -434,6 +436,8 @@ public class Transpiler
         spCode = PrepareSource(spCode);
         spCode = FixFloatLiterals(spCode);
 
+        _userDefinedFunctions.Clear();
+
         // Class declarations may appear after their use, so collect them
         // before transpiling individual lines.
         var declaredClasses = GetDeclaredClasses(spCode);
@@ -476,6 +480,20 @@ public class Transpiler
                     code,
                     sourceLines,
                     ref lineNumber
+                );
+            }
+
+            if (IsFunctionDeclaration(code))
+            {
+                var funcName = ExtractFunctionName(code);
+                if (funcName != null)
+                    _userDefinedFunctions.Add(funcName);
+            }
+            else
+            {
+                code = ApplyPythonStyleNameConversion(
+                    code,
+                    _userDefinedFunctions
                 );
             }
 
@@ -565,6 +583,20 @@ public class Transpiler
                             blockCode,
                             '{'
                         );
+
+                    if (IsFunctionDeclaration(blockCode))
+                    {
+                        var funcName = ExtractFunctionName(blockCode);
+                        if (funcName != null)
+                            _userDefinedFunctions.Add(funcName);
+                    }
+                    else
+                    {
+                        blockCode = ApplyPythonStyleNameConversion(
+                            blockCode,
+                            _userDefinedFunctions
+                        );
+                    }
 
                     int closes =
                         CountBraces(
@@ -1148,6 +1180,74 @@ public class Transpiler
         }
 
         return count;
+    }
+
+    private static string? ExtractFunctionName(string code)
+    {
+        var match = Regex.Match(
+            code,
+            @"\bdef\s+([A-Za-z_][A-Za-z0-9_]*)"
+        );
+
+        return match.Success
+            ? match.Groups[1].Value
+            : null;
+    }
+
+    private static string ApplyPythonStyleNameConversion(
+        string code,
+        HashSet<string> userDefinedFunctions)
+    {
+        var regex = new Regex(
+            @"(\.[ \t]*)([A-Za-z_][A-Za-z0-9_]*)([ \t]*\()"
+        );
+
+        return regex.Replace(code, match =>
+        {
+            if (IsInsideString(code, match.Index))
+                return match.Value;
+
+            var method = match.Groups[2].Value;
+
+            if (!method.Contains('_') ||
+                userDefinedFunctions.Contains(method))
+            {
+                return match.Value;
+            }
+
+            return
+                match.Groups[1].Value +
+                ToPascalCase(method) +
+                match.Groups[3].Value;
+        });
+    }
+
+    private static bool IsInsideString(string text, int index)
+    {
+        bool inString = false;
+        bool escaped = false;
+
+        for (int i = 0; i < index; i++)
+        {
+            char c = text[i];
+
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (c == '\\' && inString)
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (c == '"')
+                inString = !inString;
+        }
+
+        return inString;
     }
 
     // SOURCE PREPARATION

@@ -86,6 +86,7 @@ if (age == 16) {
 * ✅ Dictionaries — Python-style `{"key": value}` syntax
 * ✅ Error context display — shows the exact source line with each error
 * ✅ Full Generics — `List<T>`, `Dictionary<K, V>`, nested generics
+* ✅ Python-like C# API names — `Console.write_line()` automatically maps to `Console.WriteLine()`
 
 ---
 
@@ -187,14 +188,30 @@ Hello World!
 ### Variables
 
 ```spy
-name = "Ali"              // type inferred
-age: int = 16             // explicit type
-pi = 3.14                 // double
-distance: double = 12.5
-population: long = 8000000000
-is_dev = true              // bool
-text: str = "Hello"       // str → string in C#
-data: Any = 42            // Any → object in C#
+name = "Ali"                    // type inferred
+age: int = 16                   // explicit type
+pi = 3.14                       // double
+distance: double = 12.5         // double
+population: long = 8000000000   // long
+is_dev = true                   // bool
+text: str = "Hello"             // str → string in C#
+data: Any = 42                  // Any → object in C#
+```
+
+### Python-like C# API Names
+
+SharpThon automatically converts snake_case method names to PascalCase when calling C# methods. This lets you use Python-style naming with .NET libraries.
+
+```spy
+Console.write_line("Hello from SharpThon!")
+Console.write_line_with_color("Red")
+```
+
+Transpiles to:
+
+```csharp
+Console.WriteLine("Hello from SharpThon!");
+Console.WriteLineWithColor("Red");
 ```
 
 ### Constants & Readonly
@@ -769,9 +786,9 @@ SharpThon/
 | Dictionaries & List Support                     | ✅ Complete |
 | Generics                                        | ✅ Complete |
 | Constants & Readonly                            | ✅ Complete |
+| Python-like names for C# APIs                   | ✅          |
 | VS Code Extension (LSP)                        | 🚧 In Progress |
 | Interfaces                                      | ❌          |
-| Python-like names for C# APIs                   | ❌          |
 | LINQ / Lambda expressions                       | ❌          |
 | Official documentation (website, PDF)           | ❌          |
 | Python UX libraries via `using` (e.g., os)      | ❌          |
