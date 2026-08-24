@@ -11,7 +11,7 @@ public sealed class PythonLikeNamesTests
         // Arrange
         var source = """
             using System
-            console.write_line("Hello")
+            Console.write_line("Hello")
             """;
 
         // Act
@@ -46,14 +46,14 @@ public sealed class PythonLikeNamesTests
     {
         // Arrange
         var source = """
-            text = "Call console.write_line()"
+            text = "Call Console.write_line()"
             """;
 
         // Act
         var transpiled = new Transpiler().Transpile(source);
 
         // Assert
-        Assert.Contains("\"Call console.write_line()\"", transpiled);
+        Assert.Contains("\"Call Console.write_line()\"", transpiled);
         Assert.DoesNotContain("Console.WriteLine", transpiled);
     }
 
@@ -62,7 +62,7 @@ public sealed class PythonLikeNamesTests
     {
         // Arrange
         var source = """
-            # This is console.write_line()
+            # This is Console.write_line()
             x = 1
             """;
 
@@ -70,7 +70,7 @@ public sealed class PythonLikeNamesTests
         var transpiled = new Transpiler().Transpile(source);
 
         // Assert
-        Assert.Contains("// This is console.write_line()", transpiled);
+        Assert.Contains("// This is Console.write_line()", transpiled);
         Assert.DoesNotContain("Console.WriteLine", transpiled);
     }
 
@@ -110,7 +110,7 @@ public sealed class PythonLikeNamesTests
             // Assert
             Assert.Contains("Result is 42", output);
             Assert.Contains("Hello SharpThon", output);
-            Assert.Contains("Keep this: console.write_line()", output);
+            Assert.Contains("Keep this: Console.write_line()", output);
             Assert.Contains("Sum is 7", output);
         }
         finally
