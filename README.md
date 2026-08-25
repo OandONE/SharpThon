@@ -88,6 +88,7 @@ if (age == 16) {
 * ✅ Full Generics — `List<T>`, `Dictionary<K, V>`, nested generics
 * ✅ Python-like C# API names — `Console.write_line()` automatically maps to `Console.WriteLine()`
 * ✅ LINQ & Lambda Expressions — `Where`, `Select`, `OrderBy`, standalone lambdas
+* ✅ Interfaces — `interface` and `:` implementation
 
 ---
 
@@ -738,6 +739,34 @@ mul = (x, y) => x * y
 
 This provides full functional programming support with LINQ.
 
+### Interfaces
+
+SharpThon supports interfaces. Define a contract that classes must implement using `interface` and `:`.
+
+```spy
+interface IAnimal {
+    def speak() -> str
+    def move(distance: int) -> None
+}
+
+class Dog : IAnimal {
+    def speak() -> str {
+        return "Woof"
+    }
+
+    def move(distance: int) -> None {
+        Write(distance)
+    }
+}
+
+my_var = Dog()
+my_var.speak()
+my_var.move(1)
+```
+
+The transpiler converts this to C# `interface` and `class : interface` syntax.
+```
+
 ### CI/CD
 
 Every push to GitHub automatically runs build and tests via GitHub Actions.
@@ -814,10 +843,10 @@ SharpThon/
 | Dictionaries & List Support                     | ✅ Complete |
 | Generics                                        | ✅ Complete |
 | Constants & Readonly                            | ✅ Complete |
-| Python-like names for C# APIs                   | ✅          |
-| LINQ / Lambda expressions                       | ✅          |
+| Python-like names for C# APIs                   | ✅ Complete |
+| LINQ / Lambda expressions                       | ✅ Complete |
+| Interfaces                                      | ✅ Complete |
 | VS Code Extension (LSP)                        | 🚧 In Progress |
-| Interfaces                                      | ❌          |
 | Official documentation (website, PDF)           | ❌          |
 | Python UX libraries via `using` (e.g., os)      | ❌          |
 | Full `async` / `await` support                  | ❌          |

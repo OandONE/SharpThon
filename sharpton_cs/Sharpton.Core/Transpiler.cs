@@ -51,6 +51,9 @@ public sealed class SharpThonCircularImportException : Exception
 public class Transpiler
 {
     private string? currentClass;
+    private string? currentInterface;
+    private int currentTypeBraceDepth;
+    private int sourceBraceDepth;
     private string? sourceDirectory;
 
     // Prevents circular imports:
@@ -133,6 +136,9 @@ public class Transpiler
         modulesInProgress.Clear();
         importPath.Clear();
         currentClass = null;
+        currentInterface = null;
+        currentTypeBraceDepth = -1;
+        sourceBraceDepth = 0;
 
         // The entry file must be part of the DFS path as well. Otherwise
         // a.spy -> b.spy -> a.spy would not be detected until too late.
@@ -437,6 +443,10 @@ public class Transpiler
         spCode = FixFloatLiterals(spCode);
 
         _userDefinedFunctions.Clear();
+        currentClass = null;
+        currentInterface = null;
+        currentTypeBraceDepth = -1;
+        sourceBraceDepth = 0;
 
         // Class declarations may appear after their use, so collect them
         // before transpiling individual lines.
@@ -584,6 +594,8 @@ public class Transpiler
                             '{'
                         );
 
+                    UpdateCurrentType(blockCode);
+
                     if (IsFunctionDeclaration(blockCode))
                     {
                         var funcName = ExtractFunctionName(blockCode);
@@ -631,6 +643,13 @@ public class Transpiler
                                 blockCode
                             );
 
+                        // Interface methods are declarations and must not have a body.
+                        if (currentInterface != null && IsInterfaceMethodDeclaration(blockCode))
+                        {
+                            innerResult =
+                                SharpThonParser.InterfaceMethodDecl.Parse(blockCode);
+                        }
+
                         // Constructor handling
 
                         if (
@@ -647,12 +666,35 @@ public class Transpiler
                                 );
                         }
 
+                        // Ensure class methods are public by default unless an explicit access modifier was provided.
+                        if (
+                            currentClass != null &&
+                            currentInterface == null &&
+                            IsFunctionDeclaration(blockCode) &&
+                            !HasExplicitAccessModifier(blockCode)
+                        )
+                        {
+                            var funcName = ExtractFunctionName(blockCode);
+                            if (funcName != currentClass) // not a constructor
+                            {
+                                if (!Regex.IsMatch(innerResult.Trim(), @"^(public|private|protected|internal)\b"))
+                                {
+                                    innerResult = Regex.Replace(
+                                        innerResult,
+                                        @"^(?<indent>\s*)(?<prefix>(?:static\s+)?)",
+                                        "${indent}public ${prefix}"
+                                    );
+                                }
+                            }
+                        }
+
                         // Function return type inference
 
                         if (
                             IsFunctionDeclaration(
                                 blockCode
-                            )
+                            ) &&
+                            currentInterface == null
                         )
                         {
                             var inferredType =
@@ -808,21 +850,8 @@ public class Transpiler
                 code
             );
 
-            // Class declaration
-
-            if (code.StartsWith("class "))
-            {
-                var parts =
-                    code.Split(
-                        new[] { ' ', '{' },
-                        StringSplitOptions.RemoveEmptyEntries
-                    );
-
-                if (parts.Length >= 2)
-                {
-                    currentClass = parts[1];
-                }
-            }
+            // Class / interface declaration tracking
+            UpdateCurrentType(code);
 
             try
             {
@@ -830,6 +859,31 @@ public class Transpiler
                     SharpThonParser.Line.Parse(
                         code
                     );
+
+                // Interface methods are declarations and must not have a body.
+                if (currentInterface != null && IsInterfaceMethodDeclaration(code))
+                {
+                    result = SharpThonParser.InterfaceMethodDecl.Parse(code);
+                }
+
+                // Class methods are instance methods by default.
+                // FunctionDecl emits `static` when no modifier is present
+                // because top-level SharpThon functions are static. Inside a
+                // class, remove that implicit static unless the source
+                // explicitly requested `static def`.
+                if (
+                    currentClass != null &&
+                    currentInterface == null &&
+                    IsFunctionDeclaration(code) &&
+                    !HasExplicitStaticModifier(code)
+                )
+                {
+                    result = Regex.Replace(
+                        result,
+                        @"^static\s+",
+                        ""
+                    );
+                }
 
                 // Constructor handling
 
@@ -847,10 +901,33 @@ public class Transpiler
                         );
                 }
 
+                // Ensure class methods are public by default unless an explicit access modifier was provided.
+                if (
+                    currentClass != null &&
+                    currentInterface == null &&
+                    IsFunctionDeclaration(code) &&
+                    !HasExplicitAccessModifier(code)
+                )
+                {
+                    var funcName = ExtractFunctionName(code);
+                    if (funcName != currentClass) // not a constructor
+                    {
+                        if (!Regex.IsMatch(result.Trim(), @"^(public|private|protected|internal)\b"))
+                        {
+                            result = Regex.Replace(
+                                result,
+                                @"^(?<indent>\s*)(?<prefix>(?:static\s+)?)",
+                                "${indent}public ${prefix}"
+                            );
+                        }
+                    }
+                }
+
                 // Function return type inference
 
                 if (
-                    IsFunctionDeclaration(code)
+                    IsFunctionDeclaration(code) &&
+                    currentInterface == null
                 )
                 {
                     var inferredType =
@@ -925,6 +1002,8 @@ public class Transpiler
                     code
                 );
             }
+
+            UpdateSourceBraceDepth(code);
         }
 
         // Format final C# output.
@@ -987,6 +1066,66 @@ public class Transpiler
         // New symbol => declaration in the current scope.
         scopes.Peek().Add(name);
         return transpiledCode;
+    }
+
+    private void UpdateCurrentType(string code)
+    {
+        var interfaceMatch = Regex.Match(
+            code,
+            @"^interface\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+        );
+
+        if (interfaceMatch.Success)
+        {
+            currentInterface = interfaceMatch.Groups[1].Value;
+            currentClass = null;
+            currentTypeBraceDepth = sourceBraceDepth +
+                CountBraces(code, '{') - CountBraces(code, '}');
+            return;
+        }
+
+        var classMatch = Regex.Match(
+            code,
+            @"^class\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+        );
+
+        if (classMatch.Success)
+        {
+            currentClass = classMatch.Groups[1].Value;
+            currentInterface = null;
+            currentTypeBraceDepth = sourceBraceDepth +
+                CountBraces(code, '{') - CountBraces(code, '}');
+        }
+    }
+
+    private void UpdateSourceBraceDepth(string code)
+    {
+        sourceBraceDepth += CountBraces(code, '{');
+        sourceBraceDepth -= CountBraces(code, '}');
+
+        if (currentTypeBraceDepth >= 0 &&
+            sourceBraceDepth < currentTypeBraceDepth)
+        {
+            currentClass = null;
+            currentInterface = null;
+            currentTypeBraceDepth = -1;
+        }
+    }
+
+    private static bool IsInterfaceMethodDeclaration(string code)
+    {
+        return Regex.IsMatch(
+            code,
+            @"^(?:(?:public|private|protected)\s+)?def\s+[A-Za-z_][A-Za-z0-9_]*\s*\("
+        );
+    }
+
+    private static bool HasExplicitStaticModifier(string code)
+    {
+        return Regex.IsMatch(
+            code,
+            @"^(?:(?:public|private|protected)\s+)*static\s+def\b"
+        );
     }
 
     private static HashSet<string> GetDeclaredClasses(string source)
@@ -1798,5 +1937,13 @@ public class Transpiler
         }
 
         return string.Join(" ", lines);
+    }
+
+    private static bool HasExplicitAccessModifier(string code)
+    {
+        return Regex.IsMatch(
+            code,
+            @"^(?:(?:public|private|protected)\s+)(?:static\s+)?def\b"
+        );
     }
 }

@@ -1002,18 +1002,72 @@ public static class SharpThonParser
         from value in Parse.CharExcept("\n\r").Many().Text()
         select $"return {value.Trim()};";
 
-    // Class And Support Interfaces
+    // Class / interface declarations
+    //
+    // Supports: class Dog
+    //           class Dog : Animal, IAnimal
+    //           interface IAnimal
+    //           interface IAnimal : IBaseAnimal, IDisposable
     public static readonly Parser<string> ClassDecl =
         from cls in Parse.String("class").Token()
         from name in Identifier
         from inheritance in (
             from colon in Parse.Char(':').Token()
-            from baseClass in Identifier
-            select baseClass
+            from bases in Identifier.DelimitedBy(Parse.Char(',').Token())
+            select bases.ToList()
         ).Optional()
         select inheritance.IsDefined
-            ? $"class {name} : {inheritance.Get()} {{"
+            ? $"class {name} : {string.Join(", ", inheritance.Get())} {{"
             : $"class {name} {{";
+
+    public static readonly Parser<string> InterfaceDecl =
+        from interfaceKw in Parse.String("interface").Token()
+        from name in Identifier
+        from inheritance in (
+            from colon in Parse.Char(':').Token()
+            from bases in Identifier.DelimitedBy(Parse.Char(',').Token())
+            select bases.ToList()
+        ).Optional()
+        select inheritance.IsDefined
+            ? $"interface {name} : {string.Join(", ", inheritance.Get())} {{"
+            : $"interface {name} {{";
+
+    // Interface members are declarations, not implementations.
+    // Example: def speak(name: str) -> str
+    // becomes:  string speak(string name);
+    public static readonly Parser<string> InterfaceMethodDecl =
+        from access in
+            Parse.String("public")
+                .Or(Parse.String("private"))
+                .Or(Parse.String("protected"))
+                .Text()
+                .Token()
+                .Optional()
+        from defKw in Parse.String("def").Token()
+        from name in Identifier
+        from openP in Parse.Char('(').Token()
+        from args in (
+            from param in Identifier
+            from type in (
+                from colon in Parse.Char(':').Token()
+                from t in TypeName
+                select t
+            ).Optional()
+            select type.IsDefined
+                ? $"{MapTypeName(type.Get())} {param}"
+                : $"dynamic {param}"
+        ).DelimitedBy(Parse.Char(',').Token()).Optional()
+        from closeP in Parse.Char(')').Token()
+        from returnType in (
+            from arrow in Parse.String("->").Token()
+            from t in TypeName
+            select t
+        ).Optional()
+        select $"{(access.IsDefined ? access.Get() + " " : "")}" +
+               $"{(returnType.IsDefined
+                    ? (returnType.Get() == "None" ? "void" : MapTypeName(returnType.Get()))
+                    : "void")} " +
+               $"{name}({string.Join(", ", args.GetOrElse(new List<string>()))});";
 
     // Go - fire and forget
     public static readonly Parser<string> GoStatement =
@@ -1040,7 +1094,11 @@ public static class SharpThonParser
             .Or(PropertyDecl)
             .Or(GetAccessor)
             .Or(SetAccessor)
+            .Or(InterfaceDecl)
             .Or(ClassDecl)
+            // InterfaceMethodDecl is intentionally not part of the generic
+            // Line parser. The Transpiler selects it only while inside an
+            // interface; otherwise `def` must use FunctionDecl.
             .Or(DictionaryLiteral)
             .Or(ListLiteral)
             .Or(VariableDecl)
