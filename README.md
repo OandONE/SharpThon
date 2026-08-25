@@ -87,6 +87,7 @@ if (age == 16) {
 * ✅ Error context display — shows the exact source line with each error
 * ✅ Full Generics — `List<T>`, `Dictionary<K, V>`, nested generics
 * ✅ Python-like C# API names — `Console.write_line()` automatically maps to `Console.WriteLine()`
+* ✅ LINQ & Lambda Expressions — `Where`, `Select`, `OrderBy`, standalone lambdas
 
 ---
 
@@ -710,6 +711,33 @@ Generic types map directly to C#:
 - `Dictionary<K, V>` → `Dictionary<K, V>`
 - Nested generics work as expected
 
+### LINQ & Lambda Expressions
+
+SharpThon supports LINQ and lambda expressions with C#-style syntax.
+
+```spy
+using System.Linq
+
+numbers = [5, 12, 8, 3, 9, 15, 2, 7]
+
+// Filter with lambda
+even_numbers = numbers.Where(x => x % 2 == 0)
+
+// Sort with lambda
+sorted = numbers.OrderByDescending(x => x)
+
+// Map with lambda
+squares = numbers.Select(x => x * x)
+
+// Standalone lambda with explicit type
+add: Func<int, int, int> = (a, b) => a + b
+
+// Standalone lambda with dynamic
+mul = (x, y) => x * y
+```
+
+This provides full functional programming support with LINQ.
+
 ### CI/CD
 
 Every push to GitHub automatically runs build and tests via GitHub Actions.
@@ -787,9 +815,9 @@ SharpThon/
 | Generics                                        | ✅ Complete |
 | Constants & Readonly                            | ✅ Complete |
 | Python-like names for C# APIs                   | ✅          |
+| LINQ / Lambda expressions                       | ✅          |
 | VS Code Extension (LSP)                        | 🚧 In Progress |
 | Interfaces                                      | ❌          |
-| LINQ / Lambda expressions                       | ❌          |
 | Official documentation (website, PDF)           | ❌          |
 | Python UX libraries via `using` (e.g., os)      | ❌          |
 | Full `async` / `await` support                  | ❌          |

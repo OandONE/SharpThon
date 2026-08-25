@@ -1,0 +1,26 @@
+def run() {
+    Write("[LINQ and Lambda]")
+
+    numbers = [5, 12, 8, 3, 9, 15, 2, 7]
+
+    even_numbers = numbers.Where(x => x % 2 == 0)
+    Write("Even: " + string.Join(", ", even_numbers))
+
+    odd_sorted = numbers.Where(x => x % 2 != 0 && x > 5).OrderByDescending(x => x)
+    Write("Odd > 5 desc: " + string.Join(", ", odd_sorted))
+
+    squares = numbers.Select(x => x * x)
+    Write("Squares: " + string.Join(", ", squares))
+
+    add_lambda: Func<int, int, int> = (a, b) => a + b
+    Write("Add 3 + 4 = " + add_lambda(3, 4))
+
+    mul_lambda = (x, y) => x * y
+    Write("Multiply 5 * 6 = " + mul_lambda(5, 6))
+
+    names = ["Ali", "Reza", "Sara", "Mamad"]
+    long_names = names.Where(name => name.Length > 3).Select(name => name.ToUpper())
+    Write("Long names: " + string.Join(", ", long_names))
+
+    Write("[LINQ and Lambda PASSED]")
+}

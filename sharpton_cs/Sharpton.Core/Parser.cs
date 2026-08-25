@@ -6,6 +6,56 @@ namespace Sharpton.Core;
 
 public static class SharpThonParser
 {
+
+    private static string BuildLambda(
+        IEnumerable<string> parameters,
+        string body)
+    {
+        var paramList = parameters.ToList();
+
+        if (paramList.Count == 1)
+            return $"{paramList[0]} => {body}";
+
+        return $"({string.Join(", ", paramList)}) => {body}";
+    }
+
+    private static bool IsLambdaExpression(string value)
+    {
+        var trimmed = value.Trim();
+        return Regex.IsMatch(
+            trimmed,
+            @"^(?:[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*|\([^)]*\))\s*=>"
+        );
+    }
+
+    private static int CountLambdaParameters(string value)
+    {
+        var trimmed = value.Trim();
+        var arrowIndex = trimmed.IndexOf("=>");
+        if (arrowIndex < 0) return 1;
+
+        var paramPart = trimmed.Substring(0, arrowIndex).Trim();
+
+        if (paramPart.StartsWith("(") && paramPart.EndsWith(")"))
+        {
+            paramPart = paramPart.Substring(1, paramPart.Length - 2).Trim();
+            if (string.IsNullOrEmpty(paramPart)) return 0;
+            return paramPart.Split(',').Length;
+        }
+
+        if (paramPart.Contains(','))
+            return paramPart.Split(',').Length;
+        else
+            return 1;
+    }
+
+    private static string BuildFuncType(int paramCount)
+    {
+        if (paramCount <= 0) return "Func<dynamic>";
+        var types = string.Join(", ", Enumerable.Repeat("dynamic", paramCount));
+        return $"Func<{types}, dynamic>";
+    }
+
     private static string BuildListLiteral(string content)
     {
         // Empty list
@@ -80,6 +130,12 @@ public static class SharpThonParser
 
         if (modifiers.Any(m => m == "const" || m == "readonly"))
             return InferVariableTypeFromValue(value);
+
+        if (IsLambdaExpression(value))
+        {
+            int paramCount = CountLambdaParameters(value);
+            return BuildFuncType(paramCount);
+        }
 
         return "var";
     }
@@ -679,6 +735,7 @@ public static class SharpThonParser
             DictionaryLiteral
                 .Or(ListLiteral)
                 .Or(ConstructorCall)
+                .Or(LambdaExpression)
                 .Or(Parse.CharExcept(";\n\r").AtLeastOnce().Text())
 
         from semicolon in Parse.Char(';').Optional()
@@ -772,6 +829,13 @@ public static class SharpThonParser
         from increment in Parse.CharExcept(")\n\r").AtLeastOnce().Text()
         from closeP in Parse.Char(')').Token()
         select $"for (int {varName} = {initialValue.Trim()}; {condition.Trim()}; {increment.Trim()}) {{";
+
+    // Lambda
+    public static readonly Parser<string> LambdaExpression =
+        from parameters in Identifier.DelimitedBy(Parse.Char(',').Token())
+        from arrow in Parse.String("=>").Token()
+        from body in Parse.CharExcept(";\n\r").AtLeastOnce().Text()
+        select BuildLambda(parameters, body.Trim());
 
     // Range-based For Loop
     public static readonly Parser<string> ForLoop = 
