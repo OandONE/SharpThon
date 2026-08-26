@@ -785,7 +785,6 @@ my_var.move(1)
 ```
 
 The transpiler converts this to C# `interface` and `class : interface` syntax.
-```
 
 ### CI/CD
 
