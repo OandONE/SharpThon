@@ -1086,7 +1086,6 @@ public static class SharpThonParser
     // Line
     public static readonly Parser<string> Line =
         ImportStatement
-            .Or(ImportStatement)
             .Or(AwaitGoStatement)
             .Or(GoStatement)
             .Or(ReturnStatement)

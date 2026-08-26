@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Text;
 using Sprache;
 
 namespace Sharpton.Core;
@@ -71,61 +72,167 @@ public class Transpiler
 
     public string TranspileFile(string filepath)
     {
-        sourceDirectory = Path.GetDirectoryName(
-            Path.GetFullPath(filepath)
-        )!;
-
+        sourceDirectory = Path.GetDirectoryName(Path.GetFullPath(filepath))!;
         InitializeImportTracking(filepath);
 
         var spCode = File.ReadAllText(filepath);
-
-        var (processedCode, moduleBodies) =
-            ProcessImports(
-                spCode,
-                allowUsingStatements: true,
-                sourceFile: filepath
-            );
+        var (processedCode, moduleBodies) = ProcessImports(
+            spCode,
+            allowUsingStatements: true,
+            sourceFile: filepath
+        );
 
         var mainCode = Transpile(processedCode);
 
         if (moduleBodies.Count == 0)
             return mainCode;
 
-        return mainCode
-            + "\n\n// --- Imported Modules ---\n\n"
-            + string.Join("\n\n", moduleBodies);
+        // Separate using directives from the main code
+        var usingLines = new List<string>();
+        var nonUsingLines = new List<string>();
+        foreach (var line in mainCode.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("using ", StringComparison.Ordinal))
+                usingLines.Add(line);
+            else
+                nonUsingLines.Add(line);
+        }
+
+        // Remove extra top-level main(); call
+        var filteredNonUsingLines = nonUsingLines
+            .Where(line => !Regex.IsMatch(line.Trim(), @"^main\(\);\s*$"))
+            .ToList();
+
+        // Change main method access modifier to public
+        for (int i = 0; i < filteredNonUsingLines.Count; i++)
+        {
+            var line = filteredNonUsingLines[i];
+            if (Regex.IsMatch(line.Trim(), @"^static\s+void\s+main\s*\("))
+            {
+                filteredNonUsingLines[i] = line.Replace(
+                    "static void main(",
+                    "public static void main("
+                );
+            }
+        }
+
+        var result = new StringBuilder();
+        // 1. all USINGs
+        result.AppendLine(string.Join("\n", usingLines));
+        // 2. Call wrapper at top-level
+        result.AppendLine("SharpThonProgram.main();");
+        // 3. Class wrapper
+        result.AppendLine("public static class SharpThonProgram");
+        result.AppendLine("{");
+        result.AppendLine(string.Join("\n", filteredNonUsingLines));
+        result.AppendLine("}");
+        // 4. modules
+        if (moduleBodies.Count > 0)
+        {
+            result.AppendLine("\n// --- Imported Modules ---\n");
+            result.AppendLine(string.Join("\n\n", moduleBodies));
+        }
+
+        return result.ToString();
     }
 
-    public (string Code, List<int> SourceLineNumbers)
-        TranspileFileWithMapping(string filepath)
+    public (string Code, List<int> SourceLineNumbers) TranspileFileWithMapping(string filepath)
     {
-        sourceDirectory = Path.GetDirectoryName(
-            Path.GetFullPath(filepath)
-        )!;
-
+        sourceDirectory = Path.GetDirectoryName(Path.GetFullPath(filepath))!;
         InitializeImportTracking(filepath);
 
         var spCode = File.ReadAllText(filepath);
-
-        var (processedCode, moduleBodies) =
-            ProcessImports(
-                spCode,
-                allowUsingStatements: true,
-                sourceFile: filepath
-            );
+        var (processedCode, moduleBodies) = ProcessImports(
+            spCode,
+            allowUsingStatements: true,
+            sourceFile: filepath
+        );
 
         var result = TranspileWithMapping(processedCode);
-
         var mainCode = result.Code;
         var sourceLineNumbers = result.SourceLineNumbers;
 
-        if (moduleBodies.Count > 0)
+        if (moduleBodies.Count == 0)
+            return (mainCode, sourceLineNumbers);
+
+        var usingLines = new List<string>();
+        var nonUsingLines = new List<string>();
+        var usingSourceLines = new List<int>();
+        var nonUsingSourceLines = new List<int>();
+        var lines = mainCode.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
         {
-            mainCode += "\n\n// --- Imported Modules ---\n\n";
-            mainCode += string.Join("\n\n", moduleBodies);
+            var line = lines[i];
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("using ", StringComparison.Ordinal))
+            {
+                usingLines.Add(line);
+                usingSourceLines.Add(sourceLineNumbers[i]);
+            }
+            else
+            {
+                nonUsingLines.Add(line);
+                nonUsingSourceLines.Add(sourceLineNumbers[i]);
+            }
         }
 
-        return (mainCode, sourceLineNumbers);
+        // Remove extra main();
+        var filteredPairs = nonUsingLines
+            .Select((line, idx) => new { Line = line, Source = nonUsingSourceLines[idx] })
+            .Where(pair => !Regex.IsMatch(pair.Line.Trim(), @"^main\(\);\s*$"))
+            .ToList();
+
+        // Change main method to public
+        for (int i = 0; i < filteredPairs.Count; i++)
+        {
+            var pair = filteredPairs[i];
+            if (Regex.IsMatch(pair.Line.Trim(), @"^static\s+void\s+main\s*\("))
+            {
+                pair = new
+                {
+                    Line = pair.Line.Replace("static void main(", "public static void main("),
+                    Source = pair.Source
+                };
+                filteredPairs[i] = pair;
+            }
+        }
+
+        var newCode = new List<string>();
+        var newSourceLines = new List<int>();
+
+        // USINGs
+        newCode.AddRange(usingLines);
+        newSourceLines.AddRange(usingSourceLines);
+
+        // top-level call
+        newCode.Add("SharpThonProgram.main();");
+        newSourceLines.Add(1);
+
+        // Class wrapper
+        newCode.Add("public static class SharpThonProgram");
+        newSourceLines.Add(1);
+        newCode.Add("{");
+        newSourceLines.Add(1);
+        newCode.AddRange(filteredPairs.Select(p => p.Line));
+        newSourceLines.AddRange(filteredPairs.Select(p => p.Source));
+        newCode.Add("}");
+        newSourceLines.Add(1);
+
+        // modules
+        if (moduleBodies.Count > 0)
+        {
+            newCode.Add("");
+            newSourceLines.Add(1);
+            newCode.Add("// --- Imported Modules ---");
+            newSourceLines.Add(1);
+            newCode.AddRange(moduleBodies);
+            // For simplicity, set module lines to 1
+            for (int i = 0; i < moduleBodies.Count; i++)
+                newSourceLines.Add(1);
+        }
+
+        return (string.Join("\n", newCode), newSourceLines);
     }
 
     // IMPORTS
@@ -158,143 +265,136 @@ public class Transpiler
 
         foreach (Match match in ModuleImportRegex.Matches(spCode))
         {
-            var moduleName = match.Groups[1].Value;
+            // Separate module list with commas
+            var moduleList = match.Groups[1].Value;
+            var moduleNames = moduleList.Split(',')
+                .Select(m => m.Trim())
+                .Where(m => !string.IsNullOrEmpty(m));
 
-            var moduleParts = moduleName.Split('.');
-            var packagePath = Path.GetFullPath(
-                Path.Combine(sourceDirectory!, Path.Combine(moduleParts))
-            );
-
-            string modulePath;
-
-            // A directory import resolves to its index.spy file. Prefer this
-            // form when a directory and a similarly named .spy file coexist.
-            if (Directory.Exists(packagePath))
+            foreach (var moduleName in moduleNames)
             {
-                modulePath = Path.Combine(packagePath, "index.spy");
+                var moduleParts = moduleName.Split('.');
+                var packagePath = Path.GetFullPath(
+                    Path.Combine(sourceDirectory!, Path.Combine(moduleParts))
+                );
 
-                if (!File.Exists(modulePath))
+                string modulePath;
+
+                if (Directory.Exists(packagePath))
                 {
-                    var missingPackageLineNumber =
-                        spCode[..match.Index].Count(c => c == '\n') + 1;
+                    modulePath = Path.Combine(packagePath, "index.spy");
+                    if (!File.Exists(modulePath))
+                    {
+                        var missingPackageLineNumber =
+                            spCode[..match.Index].Count(c => c == '\n') + 1;
+                        throw new SharpThonImportException(
+                            sourceFile,
+                            missingPackageLineNumber,
+                            moduleName,
+                            isPackage: true
+                        );
+                    }
+                }
+                else
+                {
+                    modulePath = Path.GetFullPath(
+                        Path.Combine(
+                            sourceDirectory!,
+                            Path.Combine(moduleParts) + ".spy"
+                        )
+                    );
 
-                    throw new SharpThonImportException(
+                    if (!File.Exists(modulePath))
+                    {
+                        var missingModuleLineNumber =
+                            spCode[..match.Index].Count(c => c == '\n') + 1;
+                        throw new SharpThonImportException(
+                            sourceFile,
+                            missingModuleLineNumber,
+                            moduleName + ".spy"
+                        );
+                    }
+                }
+
+                var className = ToPascalCase(moduleName);
+                moduleMap[moduleName] = className;
+
+                var lineNumber =
+                    spCode[..match.Index].Count(c => c == '\n') + 1;
+
+                // check circular import
+                if (modulesInProgress.Contains(modulePath))
+                {
+                    var cycleStart = importPath.IndexOf(modulePath);
+                    var cycle = importPath
+                        .Skip(cycleStart)
+                        .Append(modulePath)
+                        .Select(path => Path.GetFileName(path)!)
+                        .ToList();
+
+                    throw new SharpThonCircularImportException(
                         sourceFile,
-                        missingPackageLineNumber,
-                        moduleName,
-                        isPackage: true
+                        lineNumber,
+                        cycle
                     );
                 }
-            }
-            else
-            {
-                modulePath = Path.GetFullPath(
-                    Path.Combine(
-                        sourceDirectory!,
-                        Path.Combine(moduleParts) + ".spy"
-                    )
-                );
 
-                if (!File.Exists(modulePath))
+                if (visitedModules.Contains(modulePath))
+                    continue;
+
+                visitedModules.Add(modulePath);
+                modulesInProgress.Add(modulePath);
+                importPath.Add(modulePath);
+
+                try
                 {
-                    var missingModuleLineNumber =
-                        spCode[..match.Index].Count(c => c == '\n') + 1;
-
-                    throw new SharpThonImportException(
-                        sourceFile,
-                        missingModuleLineNumber,
-                        moduleName + ".spy"
-                    );
+                    var body = TranspileModule(modulePath, className);
+                    if (!string.IsNullOrWhiteSpace(body))
+                        moduleBodies.Add(body);
                 }
-            }
-
-            var className = ToPascalCase(moduleName);
-
-            moduleMap[moduleName] = className;
-
-            var lineNumber =
-                spCode[..match.Index].Count(c => c == '\n') + 1;
-
-            // A module already on the active DFS path is a back edge and
-            // therefore a circular import. Check this before visitedModules:
-            // visited modules are valid shared dependencies, active ones are
-            // not.
-            if (modulesInProgress.Contains(modulePath))
-            {
-                var cycleStart = importPath.IndexOf(modulePath);
-                var cycle = importPath
-                    .Skip(cycleStart)
-                    .Append(modulePath)
-                    .Select(path => Path.GetFileName(path)!)
-                    .ToList();
-
-                throw new SharpThonCircularImportException(
-                    sourceFile,
-                    lineNumber,
-                    cycle
-                );
-            }
-
-            // This module was completely expanded through another branch.
-            if (visitedModules.Contains(modulePath))
-                continue;
-
-            visitedModules.Add(modulePath);
-            modulesInProgress.Add(modulePath);
-            importPath.Add(modulePath);
-
-            try
-            {
-                var body = TranspileModule(
-                    modulePath,
-                    className
-                );
-
-                if (!string.IsNullOrWhiteSpace(body))
-                    moduleBodies.Add(body);
-            }
-            finally
-            {
-                importPath.RemoveAt(importPath.Count - 1);
-                modulesInProgress.Remove(modulePath);
+                finally
+                {
+                    importPath.RemoveAt(importPath.Count - 1);
+                    modulesInProgress.Remove(modulePath);
+                }
             }
         }
 
+        // convert lines import to using static
         var lines = spCode.Split('\n');
         var newLines = new List<string>();
 
         foreach (var line in lines)
         {
             var trimmed = line.Trim();
-
             var match = ModuleImportRegex.Match(trimmed);
 
-            if (match.Success &&
-                moduleMap.TryGetValue(
-                    match.Groups[1].Value,
-                    out var className))
+            if (match.Success)
             {
-                /*
-                 * using static is valid only at namespace/file level.
-                 *
-                 * Never put:
-                 *
-                 * public static class Test2
-                 * {
-                 *     using static Test1;   <-- INVALID C#
-                 * }
-                 *
-                 * Therefore modules themselves do not receive
-                 * using static statements.
-                 */
-                if (allowUsingStatements)
+                var moduleList = match.Groups[1].Value;
+                var moduleNames = moduleList.Split(',')
+                    .Select(m => m.Trim())
+                    .Where(m => !string.IsNullOrEmpty(m));
+
+                bool allFound = true;
+                var classNames = new List<string>();
+                foreach (var moduleName in moduleNames)
                 {
-                    newLines.Add(
-                        $"using static {className};"
-                    );
+                    if (moduleMap.TryGetValue(moduleName, out var className))
+                        classNames.Add(className);
+                    else
+                    {
+                        allFound = false;
+                        break;
+                    }
                 }
 
-                continue;
+                if (allFound && allowUsingStatements)
+                {
+                    foreach (var className in classNames)
+                        newLines.Add($"using static {className};");
+                    continue;
+                }
             }
 
             newLines.Add(line);
@@ -302,15 +402,7 @@ public class Transpiler
 
         var processedCode = string.Join("\n", newLines);
 
-        /*
-         * Convert:
-         *
-         * math_utils.add()
-         *
-         * to:
-         *
-         * MathUtils.add()
-         */
+        // Replace module name by class name in codes
         foreach (var (moduleName, className) in moduleMap)
         {
             processedCode = Regex.Replace(
@@ -323,53 +415,30 @@ public class Transpiler
         return (processedCode, moduleBodies);
     }
 
-    private string TranspileModule(
-        string modulePath,
-        string className)
+    private string TranspileModule(string modulePath, string className)
     {
         var spCode = File.ReadAllText(modulePath);
+        var (processedCode, nestedModules) = ProcessImports(
+            spCode,
+            allowUsingStatements: false,
+            sourceFile: modulePath
+        );
 
-        /*
-         * Important:
-         *
-         * Modules must NOT generate "using static ..."
-         * statements inside their class body.
-         */
-        var (processedCode, nestedModules) =
-            ProcessImports(
-                spCode,
-                allowUsingStatements: false,
-                sourceFile: modulePath
-            );
-
-        /*
-         * Transpile the module normally.
-         *
-         * Function return-type inference happens inside
-         * Transpile(), exactly like the main file.
-         */
         var body = Transpile(processedCode);
-
-        /*
-         * Only after return types have been resolved,
-         * make module members public.
-         */
         body = MakeModuleMembersPublic(body);
 
-        var result =
-            $"public static class {className}\n" +
-            "{\n" +
-            body +
-            "\n}";
+        // Remove ever line using from body
+        var lines = body.Split('\n');
+        var filteredLines = lines.Where(line =>
+            !line.TrimStart().StartsWith("using ", StringComparison.Ordinal)
+        ).ToList();
+        body = string.Join("\n", filteredLines);
+
+        var result = $"public static class {className}\n{{\n{body}\n}}";
 
         if (nestedModules.Count > 0)
         {
-            result +=
-                "\n\n" +
-                string.Join(
-                    "\n\n",
-                    nestedModules
-                );
+            result += "\n\n" + string.Join("\n\n", nestedModules);
         }
 
         return result;
@@ -412,7 +481,7 @@ public class Transpiler
 
     private static readonly Regex ModuleImportRegex =
         new(
-            @"^import\s+([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)$",
+            @"^import\s+([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)*)$",
             RegexOptions.Multiline
         );
 
