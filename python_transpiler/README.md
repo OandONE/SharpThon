@@ -1,0 +1,2 @@
+<h1 style="color: red;">This transpiler is the initial MVP version</h1>
+<h2 style="color: red;">this version is deprecated and was only for early testing. For the final version of the project, which is developed with C# and .NET 8, open the sharpthon_cs folder.</h2>

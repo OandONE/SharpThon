@@ -90,6 +90,7 @@ if (age == 16) {
 * ✅ LINQ & Lambda Expressions — `Where`, `Select`, `OrderBy`, standalone lambdas
 * ✅ Interfaces — `interface` and `:` implementation
 * ✅ Class hoisting — classes are moved to the end of generated code (Python-like)
+* ✅ Multi-module imports — `import os, sys, math`
 
 ---
 
@@ -865,7 +866,16 @@ SharpThon/
 | Python-like names for C# APIs                   | ✅ Complete |
 | LINQ / Lambda expressions                       | ✅ Complete |
 | Interfaces                                      | ✅ Complete |
+| Multi-module import (`import a, b, c`)          | ✅ Complete |
 | VS Code Extension (LSP)                        | 🚧 In Progress |
+| Relative imports (`"../utils/math"`)            | ❌          |
+| Import aliases (`import x as y`)                | ❌          |
+| `from` imports (`from x import y`)              | ❌          |
+| Conditional imports                             | ❌          |
+| Lazy imports (inside functions)                 | ❌          |
+| Quoted imports with extension                   | ❌          |
+| Module caching                                  | ❌          |
+| Better circular import reporting                | ❌          |
 | Official documentation (website, PDF)           | ❌          |
 | Python UX libraries via `using` (e.g., os)      | ❌          |
 | Full `async` / `await` support                  | ❌          |

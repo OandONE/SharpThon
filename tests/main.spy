@@ -14,8 +14,7 @@ import TestNotCommand
 import TestDictionary
 import TestGenerics
 import TestPythonLikeNames
-import TestLinqLambda
-import TestInterface
+import TestLinqLambda, TestInterface
 
 using System.Linq
 
@@ -50,5 +49,4 @@ def main() {
 }
 
 main()
-
 
