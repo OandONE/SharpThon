@@ -89,6 +89,7 @@ if (age == 16) {
 * ✅ Python-like C# API names — `Console.write_line()` automatically maps to `Console.WriteLine()`
 * ✅ LINQ & Lambda Expressions — `Where`, `Select`, `OrderBy`, standalone lambdas
 * ✅ Interfaces — `interface` and `:` implementation
+* ✅ Class hoisting — classes are moved to the end of generated code (Python-like)
 
 ---
 
@@ -121,6 +122,25 @@ class UserService {
     }
 }
 ```
+
+### Class Hoisting
+
+Classes can be defined anywhere in the file. SharpThon automatically moves all class declarations to the end of the generated C# code — just like Python.
+
+```spy
+// Class is defined first
+class Dog {
+    def speak() -> str {
+        return "Woof"
+    }
+}
+
+// But used here, before the class in source
+my_dog = Dog()
+Write(my_dog.speak())
+```
+
+This transpiles to valid C# with classes at the bottom. No need to worry about class ordering.
 
 ---
 

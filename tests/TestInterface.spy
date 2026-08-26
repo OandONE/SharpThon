@@ -1,0 +1,22 @@
+interface IAnimal {
+    def speak() -> str
+    def move(distance: int) -> None
+}
+
+class Dog : IAnimal {
+    def speak() -> str {
+        return "Woof"
+    }
+
+    def move(distance: int) -> None {
+        Write(distance)
+    }
+}
+
+def run() {
+    my_var = Dog()
+
+    Write(my_var.speak())
+
+    my_var.move(1)
+}

@@ -15,6 +15,7 @@ import TestDictionary
 import TestGenerics
 import TestPythonLikeNames
 import TestLinqLambda
+import TestInterface
 
 using System.Linq
 
@@ -40,6 +41,7 @@ def main() {
     TestGenerics.run()
     TestPythonLikeNames.run()
     TestLinqLambda.run()
+    TestInterface.run()
 
     Write("================================")
     Write("        ALL TESTS PASSED")

@@ -456,6 +456,46 @@ public class Transpiler
         var sourceLineNumbers = new List<int>();
         var sourceLines = spCode.Split('\n');
 
+        // State for collecting class/interface blocks to move to the end
+        bool inClassBlock = false;
+        int classBlockDepth = 0;
+        List<string>? currentClassBlockLines = null;
+        List<int>? currentClassBlockSourceLines = null;
+        var classBlocks = new List<(List<string> Lines, List<int> SourceLines)>();
+
+        // Helper to add output to the correct list (top-level or class block)
+        void AddOutput(string outputLine, int sourceLine)
+        {
+            if (inClassBlock)
+            {
+                currentClassBlockLines!.Add(outputLine);
+                currentClassBlockSourceLines!.Add(sourceLine);
+            }
+            else
+            {
+                results.Add(outputLine);
+                sourceLineNumbers.Add(sourceLine);
+            }
+        }
+
+        // Helper to update class block depth and finalize block when closed
+        void UpdateClassBlockDepth(string sourceLine)
+        {
+            if (!inClassBlock)
+                return;
+
+            classBlockDepth += CountBraces(sourceLine, '{') - CountBraces(sourceLine, '}');
+
+            if (classBlockDepth <= 0)
+            {
+                // Finalize the block
+                classBlocks.Add((currentClassBlockLines!, currentClassBlockSourceLines!));
+                inClassBlock = false;
+                currentClassBlockLines = null;
+                currentClassBlockSourceLines = null;
+            }
+        }
+
         // SharpThon variable symbol table.
         // Each block gets its own scope.
         // Lookup walks from the innermost scope to outer scopes.
@@ -475,6 +515,14 @@ public class Transpiler
             var (code, comment) = SplitSharpThonComment(line);
 
             code = code.Trim();
+
+            if (!inClassBlock && IsTypeDeclaration(code))
+            {
+                inClassBlock = true;
+                currentClassBlockLines = new List<string>();
+                currentClassBlockSourceLines = new List<int>();
+                classBlockDepth = 0; // will be updated after processing this line
+            }
 
             if (IsMultilineDictionaryStart(code))
             {
@@ -545,8 +593,8 @@ public class Transpiler
                         ? "Task.Run(() => {"
                         : "Task.Run(() => {";
 
-                results.Add(wrapper);
-                sourceLineNumbers.Add(lineNumber + 1);
+                AddOutput(wrapper, lineNumber + 1);
+                UpdateClassBlockDepth(code); // opening brace of go block
 
                 // The go block has its own variable scope.
                 variableScopes.Push(
@@ -576,11 +624,8 @@ public class Transpiler
 
                     if (string.IsNullOrEmpty(blockCode))
                     {
-                        results.Add("");
-
-                        sourceLineNumbers.Add(
-                            lineNumber + 1
-                        );
+                        AddOutput("", lineNumber + 1);
+                        UpdateClassBlockDepth(blockCode); // no braces, but still call
 
                         lineNumber++;
                         continue;
@@ -626,6 +671,8 @@ public class Transpiler
                         blockCode == "}"
                     )
                     {
+                        // Decrement class block depth for the closing brace
+                        UpdateClassBlockDepth(blockCode);
                         break;
                     }
 
@@ -740,11 +787,8 @@ public class Transpiler
                                 " " + blockComment;
                         }
 
-                        results.Add(innerResult);
-
-                        sourceLineNumbers.Add(
-                            lineNumber + 1
-                        );
+                        AddOutput(innerResult, lineNumber + 1);
+                        UpdateClassBlockDepth(blockCode);
 
                         // Open variable scopes after processing `{`.
 
@@ -758,11 +802,8 @@ public class Transpiler
                     {
                         // Keep fallback behavior consistent
                         // with normal transpilation.
-                        results.Add(blockCode);
-
-                        sourceLineNumbers.Add(
-                            lineNumber + 1
-                        );
+                        AddOutput(blockCode, lineNumber + 1);
+                        UpdateClassBlockDepth(blockCode);
 
                         OpenVariableScopes(
                             variableScopes,
@@ -795,18 +836,15 @@ public class Transpiler
                     {
                         // Since current SharpThon functions are synchronous,
                         // wait for the Task to complete.
-                        results.Add(
-                            "}).GetAwaiter().GetResult();"
+                        AddOutput(
+                            "}).GetAwaiter().GetResult();",
+                            lineNumber + 1
                         );
                     }
                     else
                     {
-                        results.Add("});");
+                        AddOutput("});", lineNumber + 1);
                     }
-
-                    sourceLineNumbers.Add(
-                        lineNumber + 1
-                    );
                 }
 
                 // Remove the scope belonging to the go block.
@@ -824,11 +862,8 @@ public class Transpiler
 
             if (string.IsNullOrEmpty(code))
             {
-                results.Add("");
-
-                sourceLineNumbers.Add(
-                    lineNumber + 1
-                );
+                AddOutput("", lineNumber + 1);
+                UpdateClassBlockDepth(code);
 
                 continue;
             }
@@ -971,11 +1006,8 @@ public class Transpiler
                         " " + comment;
                 }
 
-                results.Add(result);
-
-                sourceLineNumbers.Add(
-                    lineNumber + 1
-                );
+                AddOutput(result, lineNumber + 1);
+                UpdateClassBlockDepth(code);
 
                 // Open a scope after processing the line containing `{`.
 
@@ -988,11 +1020,8 @@ public class Transpiler
             catch (Sprache.ParseException)
             {
                 // Keep the source line as fallback.
-                results.Add(code);
-
-                sourceLineNumbers.Add(
-                    lineNumber + 1
-                );
+                AddOutput(code, lineNumber + 1);
+                UpdateClassBlockDepth(code);
 
                 // Keep scope tracking alive even when the parser
                 // doesn't understand this particular line yet.
@@ -1006,12 +1035,21 @@ public class Transpiler
             UpdateSourceBraceDepth(code);
         }
 
-        // Format final C# output.
+        // Combine top-level results with collected class blocks
+        var combinedResults = new List<string>(results);
+        var combinedSourceLineNumbers = new List<int>(sourceLineNumbers);
 
+        foreach (var block in classBlocks)
+        {
+            combinedResults.AddRange(block.Lines);
+            combinedSourceLineNumbers.AddRange(block.SourceLines);
+        }
+
+        // Format final C# output using combined lists
         var formatted =
             FormatResults(
-                results,
-                sourceLineNumbers
+                combinedResults,
+                combinedSourceLineNumbers
             );
 
         return (
@@ -1944,6 +1982,14 @@ public class Transpiler
         return Regex.IsMatch(
             code,
             @"^(?:(?:public|private|protected)\s+)(?:static\s+)?def\b"
+        );
+    }
+
+    private static bool IsTypeDeclaration(string code)
+    {
+        return Regex.IsMatch(
+            code,
+            @"^(?:(?:public|private|protected)\s+)?(class|interface)\s+[A-Za-z_][A-Za-z0-9_]*"
         );
     }
 }
