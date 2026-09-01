@@ -787,6 +787,38 @@ my_var.move(1)
 
 The transpiler converts this to C# `interface` and `class : interface` syntax.
 
+### Relative Imports
+
+Import files from other directories using quoted paths:
+
+```spy
+import "../utils/math_utils"
+import "./helpers/string_utils"
+import "../../core/database"
+```
+
+### Import Aliases
+
+Give a module a shorter name:
+
+```spy
+import very_long_module_name as vl
+import math_utils as mu
+
+result = mu.add(10, 20)
+```
+
+### From Imports
+
+Import specific items from a module:
+
+```spy
+from math_utils import add, multiply
+from my_package import *
+```
+
+Only the specified functions/classes are imported. `*` imports everything.
+
 ### CI/CD
 
 Every push to GitHub automatically runs build and tests via GitHub Actions.
