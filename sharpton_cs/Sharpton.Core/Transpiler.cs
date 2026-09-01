@@ -69,6 +69,30 @@ public class Transpiler
 
     private readonly HashSet<string> _userDefinedFunctions = new(StringComparer.Ordinal);
 
+    // In-memory module cache. The key is the normalized physical module path.
+    // Cached modules are reused by subsequent TranspileFile calls while the
+    // source file metadata is unchanged. This is especially useful for long-
+    // lived hosts such as the future LSP server.
+    private readonly Dictionary<string, ModuleCacheEntry> moduleCache =
+        new(StringComparer.Ordinal);
+
+    private sealed class ModuleCacheEntry
+    {
+        public required string ClassName { get; init; }
+        public required string Body { get; init; }
+
+        // The cached result includes the module itself and every nested module
+        // that was embedded in its generated body. A cache hit is valid only
+        // while all of those source files keep the same metadata.
+        public required Dictionary<string, ModuleFileStamp> SourceFiles { get; init; }
+    }
+
+    private sealed class ModuleFileStamp
+    {
+        public required DateTime LastWriteTimeUtc { get; init; }
+        public required long Length { get; init; }
+    }
+
     public string TranspileFile(string filepath)
     {
         InitializeImportTracking(filepath);
@@ -400,13 +424,68 @@ public class Transpiler
 
             if (!visitedModules.Contains(modulePath))
             {
+                var visitedBeforeModule = new HashSet<string>(visitedModules);
                 visitedModules.Add(modulePath);
+
+                // Reuse a previously transpiled module when the module and
+                // all nested modules embedded in its cached body are unchanged.
+                // Circular-import checks intentionally happen before this
+                // lookup so caching can never hide a cycle.
+                if (moduleCache.TryGetValue(modulePath, out var cached) &&
+                    IsModuleCacheValid(cached) &&
+                    !generatedClassByModulePath.Values.Contains(
+                        cached.ClassName,
+                        StringComparer.Ordinal
+                    ))
+                {
+                    uniqueClassName = cached.ClassName;
+                    moduleMap[moduleName] = uniqueClassName;
+                    moduleReferenceMap[moduleName] = moduleReferenceName;
+                    moduleUsingMap[moduleName] = alias == null;
+
+                    // The cached body may contain nested module classes too.
+                    // Mark every source file represented by that body as
+                    // visited so a later direct import cannot emit duplicates.
+                    foreach (var cachedPath in cached.SourceFiles.Keys)
+                        visitedModules.Add(cachedPath);
+
+                    if (!string.IsNullOrWhiteSpace(cached.Body))
+                        moduleBodies.Add(cached.Body);
+
+                    return uniqueClassName;
+                }
+
                 modulesInProgress.Add(modulePath);
                 importPath.Add(modulePath);
 
                 try
                 {
                     var body = TranspileModule(modulePath, uniqueClassName);
+
+                    var cachedSourceFiles = new Dictionary<string, ModuleFileStamp>(
+                        StringComparer.Ordinal
+                    );
+
+                    foreach (var cachedPath in visitedModules.Except(visitedBeforeModule))
+                    {
+                        if (!File.Exists(cachedPath))
+                            continue;
+
+                        var info = new FileInfo(cachedPath);
+                        cachedSourceFiles[cachedPath] = new ModuleFileStamp
+                        {
+                            LastWriteTimeUtc = info.LastWriteTimeUtc,
+                            Length = info.Length
+                        };
+                    }
+
+                    moduleCache[modulePath] = new ModuleCacheEntry
+                    {
+                        ClassName = uniqueClassName,
+                        Body = body,
+                        SourceFiles = cachedSourceFiles
+                    };
+
                     if (!string.IsNullOrWhiteSpace(body))
                         moduleBodies.Add(body);
                 }
@@ -823,6 +902,27 @@ public class Transpiler
         }
 
         return split;
+    }
+
+    private static bool IsModuleCacheValid(ModuleCacheEntry entry)
+    {
+        if (entry.SourceFiles.Count == 0)
+            return false;
+
+        foreach (var (path, stamp) in entry.SourceFiles)
+        {
+            if (!File.Exists(path))
+                return false;
+
+            var info = new FileInfo(path);
+            if (info.LastWriteTimeUtc != stamp.LastWriteTimeUtc ||
+                info.Length != stamp.Length)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private string TranspileModule(string modulePath, string className)

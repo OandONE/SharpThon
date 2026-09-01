@@ -902,11 +902,11 @@ SharpThon/
 | Relative imports (`"../utils/math"`)            | ✅ Complete |
 | Import aliases (`import x as y`)                | ✅ Complete |
 | `from` imports (`from x import y`)              | ✅ Complete |
+| Module caching                                  | ✅ Complete |
 | VS Code Extension (LSP)                        | 🚧 In Progress |
 | Conditional imports                             | ❌          |
 | Lazy imports (inside functions)                 | ❌          |
 | Quoted imports with extension                   | ❌          |
-| Module caching                                  | ❌          |
 | Better circular import reporting                | ❌          |
 | Official documentation (website, PDF)           | ❌          |
 | Python UX libraries via `using` (e.g., os)      | ❌          |
