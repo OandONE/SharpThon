@@ -314,18 +314,6 @@ public class Transpiler
     }
 
 
-    private static readonly Dictionary<string, string> RequiredLibraryClassNames =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["os"] = "SharpThonOs",
-            ["json"] = "SharpThonJson",
-            ["re"] = "SharpThonRe",
-            ["sys"] = "SharpThonSys",
-            ["random"] = "SharpThonRandom",
-            ["math"] = "SharpThonMath",
-            ["time"] = "SharpThonTime"
-        };
-
     private string ProcessRequiredLibraries(string spCode)
     {
         var lines = spCode.Split('\n');
@@ -364,7 +352,7 @@ public class Transpiler
                     ? aliasMatch.Groups["alias"].Value
                     : name;
 
-                if (!RequiredLibraryClassNames.ContainsKey(name))
+                if (!SharpThonLibraries.IsSupported(name))
                 {
                     allKnown = false;
                     break;
@@ -375,16 +363,14 @@ public class Transpiler
 
             if (!allKnown)
             {
-                // Leave unknown `require` lines untouched so the normal
-                // parser/compiler diagnostics can report them.
                 output.Add(line);
                 continue;
             }
 
             foreach (var item in parsedItems)
             {
-                required.Add(item.Name);
-                aliases[item.ReferenceName] = item.Name;
+                required.Add(SharpThonLibraries.NormalizeName(item.Name));
+                aliases[item.ReferenceName] = SharpThonLibraries.NormalizeName(item.Name);
             }
         }
 
@@ -398,7 +384,7 @@ public class Transpiler
             processed = Regex.Replace(
                 processed,
                 $@"\b{Regex.Escape(referenceName)}\.",
-                $"{RequiredLibraryClassNames[libraryName]}."
+                $"{SharpThonLibraries.GetClassName(libraryName)}."
             );
         }
 
@@ -422,12 +408,12 @@ public class Transpiler
         List<string> output,
         List<int> sourceLines)
     {
-        foreach (var library in RequiredLibraryOrder)
+        foreach (var library in SharpThonLibraries.Order)
         {
             if (!requiredLibraries.Contains(library))
                 continue;
 
-            var body = GetRequiredLibraryBody(library);
+            var body = SharpThonLibraries.GetBody(library);
             foreach (var line in body.Split('\n'))
             {
                 output.Add(line);
@@ -437,218 +423,6 @@ public class Transpiler
             output.Add("");
             sourceLines.Add(1);
         }
-    }
-
-    private static readonly string[] RequiredLibraryOrder =
-    {
-        "os", "json", "re", "sys", "random", "math", "time"
-    };
-
-    private static string GetRequiredLibraryBody(string library)
-    {
-        return library.ToLowerInvariant() switch
-        {
-            "os" => """
-public static class SharpThonOs
-{
-    public static string getcwd() => System.IO.Directory.GetCurrentDirectory();
-    public static string[] listdir(string path = ".") => System.IO.Directory.GetFileSystemEntries(path);
-    public static bool mkdir(string path) { System.IO.Directory.CreateDirectory(path); return true; }
-    public static bool makedirs(string path) { System.IO.Directory.CreateDirectory(path); return true; }
-    public static bool remove(string path) { System.IO.File.Delete(path); return true; }
-    public static bool rmdir(string path) { System.IO.Directory.Delete(path); return true; }
-    public static string abspath(string path) => System.IO.Path.GetFullPath(path);
-    public static string join(string a, string b) => System.IO.Path.Combine(a, b);
-
-    public static class path
-    {
-        public static bool exists(string value) => System.IO.File.Exists(value) || System.IO.Directory.Exists(value);
-        public static bool isfile(string value) => System.IO.File.Exists(value);
-        public static bool isdir(string value) => System.IO.Directory.Exists(value);
-        public static string join(string a, string b) => System.IO.Path.Combine(a, b);
-        public static string dirname(string value) => System.IO.Path.GetDirectoryName(value) ?? "";
-        public static string basename(string value) => System.IO.Path.GetFileName(value);
-        public static string abspath(string value) => System.IO.Path.GetFullPath(value);
-    }
-}
-""",
-            "json" => """
-public static class SharpThonJson
-{
-    public static dynamic loads(string text)
-    {
-        using var document = System.Text.Json.JsonDocument.Parse(text);
-        return Convert(document.RootElement);
-    }
-
-    public static string dumps(dynamic value)
-    {
-        return System.Text.Json.JsonSerializer.Serialize(value);
-    }
-
-    private static dynamic Convert(System.Text.Json.JsonElement element)
-    {
-        switch (element.ValueKind)
-        {
-            case System.Text.Json.JsonValueKind.Object:
-            {
-                var result = new System.Collections.Generic.Dictionary<string, object>();
-                foreach (var property in element.EnumerateObject())
-                    result[property.Name] = Convert(property.Value);
-                return result;
-            }
-            case System.Text.Json.JsonValueKind.Array:
-            {
-                var result = new System.Collections.Generic.List<object>();
-                foreach (var item in element.EnumerateArray())
-                    result.Add(Convert(item));
-                return result;
-            }
-            case System.Text.Json.JsonValueKind.String:
-                return element.GetString() ?? "";
-            case System.Text.Json.JsonValueKind.Number:
-                if (element.TryGetInt64(out var integer)) return integer;
-                return element.GetDouble();
-            case System.Text.Json.JsonValueKind.True:
-                return true;
-            case System.Text.Json.JsonValueKind.False:
-                return false;
-            case System.Text.Json.JsonValueKind.Null:
-                return null;
-            default:
-                return element.ToString();
-        }
-    }
-}
-""",
-            "re" => """
-public static class SharpThonRe
-{
-    public static SharpThonRegexMatch? match(string pattern, string text)
-    {
-        var match = System.Text.RegularExpressions.Regex.Match(text, pattern);
-        return match.Success ? new SharpThonRegexMatch(match) : null;
-    }
-
-    public static SharpThonRegexMatch? search(string pattern, string text)
-    {
-        var match = System.Text.RegularExpressions.Regex.Match(text, pattern);
-        return match.Success ? new SharpThonRegexMatch(match) : null;
-    }
-
-    public static System.Collections.Generic.List<string> findall(string pattern, string text)
-    {
-        return System.Text.RegularExpressions.Regex.Matches(text, pattern)
-            .Cast<System.Text.RegularExpressions.Match>()
-            .Select(m => m.Value)
-            .ToList();
-    }
-
-    public static string sub(string pattern, string replacement, string text)
-        => System.Text.RegularExpressions.Regex.Replace(text, pattern, replacement);
-
-    public static string[] split(string pattern, string text)
-        => System.Text.RegularExpressions.Regex.Split(text, pattern);
-
-    public static bool ismatch(string pattern, string text)
-        => System.Text.RegularExpressions.Regex.IsMatch(text, pattern);
-}
-
-public sealed class SharpThonRegexMatch
-{
-    private readonly System.Text.RegularExpressions.Match match;
-
-    public SharpThonRegexMatch(System.Text.RegularExpressions.Match match)
-    {
-        this.match = match;
-    }
-
-    public bool success => match.Success;
-    public string group(int index = 0) => match.Groups[index].Value;
-    public string[] groups => match.Groups.Cast<System.Text.RegularExpressions.Group>().Skip(1).Select(x => x.Value).ToArray();
-}
-""",
-            "sys" => """
-public static class SharpThonSys
-{
-    public static string[] argv => System.Environment.GetCommandLineArgs();
-    public static string version => System.Environment.Version.ToString();
-    public static string platform => System.Environment.OSVersion.Platform.ToString();
-    public static string newline => System.Environment.NewLine;
-    public static string? getenv(string name) => System.Environment.GetEnvironmentVariable(name);
-    public static void exit(int code = 0) => System.Environment.Exit(code);
-}
-""",
-            "random" => """
-public static class SharpThonRandom
-{
-    private static readonly System.Random _random = new();
-
-    public static double random() => _random.NextDouble();
-    public static int randint(int a, int b) => _random.Next(a, b + 1);
-    public static int randrange(int stop) => _random.Next(stop);
-    public static int randrange(int start, int stop) => _random.Next(start, stop);
-    public static int randrange(int start, int stop, int step)
-    {
-        var values = new System.Collections.Generic.List<int>();
-        if (step == 0) throw new System.ArgumentException("step cannot be zero");
-        if (step > 0)
-            for (var i = start; i < stop; i += step) values.Add(i);
-        else
-            for (var i = start; i > stop; i += step) values.Add(i);
-        if (values.Count == 0) throw new System.ArgumentException("empty range for randrange()");
-        return values[_random.Next(values.Count)];
-    }
-
-    public static dynamic choice(dynamic sequence)
-    {
-        return sequence[_random.Next((int)sequence.Count)];
-    }
-}
-""",
-            "math" => """
-public static class SharpThonMath
-{
-    public const double pi = System.Math.PI;
-    public const double e = System.Math.E;
-    public static double sqrt(double value) => System.Math.Sqrt(value);
-    public static double pow(double x, double y) => System.Math.Pow(x, y);
-    public static double floor(double value) => System.Math.Floor(value);
-    public static double ceil(double value) => System.Math.Ceiling(value);
-    public static double sin(double value) => System.Math.Sin(value);
-    public static double cos(double value) => System.Math.Cos(value);
-    public static double tan(double value) => System.Math.Tan(value);
-    public static double log(double value) => System.Math.Log(value);
-    public static double log10(double value) => System.Math.Log10(value);
-    public static double exp(double value) => System.Math.Exp(value);
-    public static double fabs(double value) => System.Math.Abs(value);
-    public static double radians(double value) => value * (pi / 180.0);
-    public static double degrees(double value) => value * (180.0 / pi);
-}
-""",
-            "time" => """
-public static class SharpThonTime
-{
-    public static double time() =>
-        (System.DateTimeOffset.UtcNow - System.DateTimeOffset.UnixEpoch).TotalSeconds;
-
-    public static string ctime(double seconds = -1)
-    {
-        var value = seconds < 0
-            ? System.DateTimeOffset.Now
-            : System.DateTimeOffset.UnixEpoch.AddSeconds(seconds).ToLocalTime();
-        return value.ToString("ddd MMM dd HH:mm:ss yyyy");
-    }
-
-    public static void sleep(double seconds)
-    {
-        if (seconds < 0) throw new System.ArgumentOutOfRangeException(nameof(seconds));
-        System.Threading.Thread.Sleep(System.TimeSpan.FromSeconds(seconds));
-    }
-}
-""",
-            _ => ""
-        };
     }
 
     private static readonly Regex RequiredImportRegex =
@@ -2384,7 +2158,7 @@ public static class SharpThonTime
             : null;
     }
 
-    private static string ApplyPythonStyleNameConversion(
+    private string ApplyPythonStyleNameConversion(
         string code,
         HashSet<string> userDefinedFunctions)
     {
@@ -2398,6 +2172,23 @@ public static class SharpThonTime
                 return match.Value;
 
             var method = match.Groups[2].Value;
+            var receiverStart = match.Index - 1;
+
+            while (receiverStart >= 0 &&
+                   (char.IsLetterOrDigit(code[receiverStart]) || code[receiverStart] == '_' || code[receiverStart] == '.'))
+            {
+                receiverStart--;
+            }
+
+            var receiver = code.Substring(
+                receiverStart + 1,
+                match.Index - (receiverStart + 1));
+
+            // Built-in require libraries intentionally expose Python-style
+            // snake_case members. Do not convert their method names to C#
+            // PascalCase.
+            if (IsRequiredLibraryReceiver(receiver))
+                return match.Value;
 
             if (!method.Contains('_') ||
                 userDefinedFunctions.Contains(method))
@@ -2410,6 +2201,15 @@ public static class SharpThonTime
                 ToPascalCase(method) +
                 match.Groups[3].Value;
         });
+    }
+
+    private bool IsRequiredLibraryReceiver(string receiver)
+    {
+        var root = receiver.Split('.')[0];
+        return requiredLibraries.Contains(root) ||
+               requiredLibraries.Any(name =>
+                   SharpThonLibraries.NormalizeName(name) == SharpThonLibraries.NormalizeName(root) ||
+                   SharpThonLibraries.GetClassName(name) == root);
     }
 
     private static bool IsInsideString(string text, int index)
