@@ -543,6 +543,7 @@ public class Transpiler
         // references such as `math.add(...)` are rewritten to the generated class.
         var lines = spCode.Split('\n');
         var newLines = new List<string>();
+        var emittedUsings = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var line in lines)
         {
@@ -573,17 +574,18 @@ public class Transpiler
 
                 if (allFound && allowUsingStatements)
                 {
-                    bool wroteUsing = false;
-
+                    // Multiple imports can resolve to the same generated class.
+                    // C# accepts duplicate using directives but emits CS0105, so
+                    // keep each generated `using static` directive only once.
                     for (int i = 0; i < importList.Count; i++)
                     {
                         var import = importList[i];
 
                         if (moduleUsingMap.TryGetValue(import.Path, out var useUsing) &&
-                            useUsing)
+                            useUsing &&
+                            emittedUsings.Add(classNames[i]))
                         {
                             newLines.Add($"using static {classNames[i]};");
-                            wroteUsing = true;
                         }
                     }
 
@@ -641,7 +643,7 @@ public class Transpiler
 
             var aliasMatch = Regex.Match(
                 item,
-                @"^(?<path>""(?:[^""]+)""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s+as\s+(?<alias>[A-Za-z_][A-Za-z0-9_]*)$"
+                @"^(?<path>""[^""]+""|[A-Za-z0-9_.\\/\-]+)\s+as\s+(?<alias>[A-Za-z_][A-Za-z0-9_]*)$"
             );
 
             if (aliasMatch.Success)
@@ -724,11 +726,48 @@ public class Transpiler
 
     private static bool IsRelativeImport(string moduleName)
     {
-        var path = UnquoteImportPath(moduleName);
+        var path = NormalizeImportPath(moduleName);
         return path.StartsWith("./", StringComparison.Ordinal) ||
                path.StartsWith("../", StringComparison.Ordinal) ||
                path.StartsWith(".\\", StringComparison.Ordinal) ||
                path.StartsWith("..\\", StringComparison.Ordinal);
+    }
+
+    private static string NormalizeImportPath(string moduleName)
+    {
+        var path = UnquoteImportPath(moduleName).Trim();
+
+        // Support dotted relative paths: `.utils.math` and `..utils.math`.
+        if (path.StartsWith("..", StringComparison.Ordinal) &&
+            path.Length > 2 &&
+            path[2] != '.' && path[2] != '/' && path[2] != '\\')
+        {
+            var hasSpyExtension = path.EndsWith(
+                ".spy", StringComparison.OrdinalIgnoreCase);
+            var dottedPart = hasSpyExtension
+                ? path[2..^4]
+                : path[2..];
+
+            path = "../" + dottedPart.Replace('.', '/');
+            if (hasSpyExtension)
+                path += ".spy";
+        }
+        else if (path.StartsWith(".", StringComparison.Ordinal) &&
+                 path.Length > 1 &&
+                 path[1] != '.' && path[1] != '/' && path[1] != '\\')
+        {
+            var hasSpyExtension = path.EndsWith(
+                ".spy", StringComparison.OrdinalIgnoreCase);
+            var dottedPart = hasSpyExtension
+                ? path[1..^4]
+                : path[1..];
+
+            path = "./" + dottedPart.Replace('.', '/');
+            if (hasSpyExtension)
+                path += ".spy";
+        }
+
+        return path.Replace('\\', '/');
     }
 
     private static string UnquoteImportPath(string moduleName)
@@ -746,18 +785,22 @@ public class Transpiler
 
     private static string GetModuleReferenceName(string moduleName)
     {
-        var path = UnquoteImportPath(moduleName)
-            .Replace('\\', '/')
-            .TrimEnd('/');
+        var path = NormalizeImportPath(moduleName).TrimEnd('/');
 
-        if (!IsRelativeImport(moduleName))
-            return path;
+        // For path-based imports, use the final file/directory name as the
+        // default module reference. Example: `import "utils/math"` -> `math`.
+        if (path.Contains('/', StringComparison.Ordinal))
+        {
+            var fileName = Path.GetFileName(path);
+            if (fileName.EndsWith(".spy", StringComparison.OrdinalIgnoreCase))
+                fileName = fileName[..^4];
+            return fileName;
+        }
 
-        var fileName = Path.GetFileName(path);
-        if (fileName.EndsWith(".spy", StringComparison.OrdinalIgnoreCase))
-            fileName = fileName[..^4];
+        if (path.EndsWith(".spy", StringComparison.OrdinalIgnoreCase))
+            return path[..^4];
 
-        return fileName;
+        return path;
     }
 
     private static string ResolveModulePath(
@@ -767,10 +810,12 @@ public class Transpiler
     {
         isPackage = false;
 
-        if (IsRelativeImport(moduleName))
+        var normalizedPath = NormalizeImportPath(moduleName);
+
+        if (IsRelativeImport(moduleName) || normalizedPath.Contains('/', StringComparison.Ordinal))
         {
-            var relativePath = UnquoteImportPath(moduleName)
-                .Replace('\\', Path.DirectorySeparatorChar);
+            var relativePath = normalizedPath
+                .Replace('/', Path.DirectorySeparatorChar);
 
             var candidate = Path.GetFullPath(
                 Path.Combine(importingDirectory, relativePath)
@@ -791,7 +836,7 @@ public class Transpiler
             return candidate;
         }
 
-        var moduleParts = moduleName.Split('.');
+        var moduleParts = normalizedPath.Split('.', StringSplitOptions.RemoveEmptyEntries);
         var packagePath = Path.GetFullPath(
             Path.Combine(importingDirectory, Path.Combine(moduleParts))
         );
@@ -991,13 +1036,13 @@ public class Transpiler
 
     private static readonly Regex ModuleImportRegex =
         new(
-            @"^import\s+((?:(""(?:\./|\.\./|\.\\|\.\.\\)[^""]+""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?)(?:\s*,\s*(""(?:\./|\.\./|\.\\|\.\.\\)[^""]+""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?)*)$",
+            @"^import\s+((?:""[^""]+""|[A-Za-z0-9_.\\/\-]+)(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?(?:\s*,\s*(?:""[^""]+""|[A-Za-z0-9_.\\/\-]+)(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?)*)$",
             RegexOptions.Multiline
         );
 
     private static readonly Regex FromImportRegex =
         new(
-            @"^from\s+(?<path>""(?:\./|\.\./|\.\\|\.\.\\)[^"" ]+""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s+import\s+(?<names>.+)$",
+            @"^from\s+(?<path>""[^""]+""|[A-Za-z0-9_.\\/\-]+)\s+import\s+(?<names>.+)$",
             RegexOptions.Multiline
         );
 

@@ -903,10 +903,10 @@ SharpThon/
 | Import aliases (`import x as y`)                | ✅ Complete |
 | `from` imports (`from x import y`)              | ✅ Complete |
 | Module caching                                  | ✅ Complete |
+| Quoted imports with extension                   | ✅ Complete |
 | VS Code Extension (LSP)                        | 🚧 In Progress |
 | Conditional imports                             | ❌          |
 | Lazy imports (inside functions)                 | ❌          |
-| Quoted imports with extension                   | ❌          |
 | Better circular import reporting                | ❌          |
 | Official documentation (website, PDF)           | ❌          |
 | Python UX libraries via `using` (e.g., os)      | ❌          |
