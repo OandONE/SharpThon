@@ -91,6 +91,9 @@ if (age == 16) {
 * ✅ Interfaces — `interface` and `:` implementation
 * ✅ Class hoisting — classes are moved to the end of generated code (Python-like)
 * ✅ Multi-module imports — `import os, sys, math`
+* ✅ Relative imports — `import "../utils/math"`
+* ✅ Import aliases — `import x as y`
+* ✅ From imports — `from x import y`
 
 ---
 
@@ -904,12 +907,12 @@ SharpThon/
 | `from` imports (`from x import y`)              | ✅ Complete |
 | Module caching                                  | ✅ Complete |
 | Quoted imports with extension                   | ✅ Complete |
+| Python UX libraries via `using` (e.g., os)      | ✅ Complete |
 | VS Code Extension (LSP)                        | 🚧 In Progress |
 | Conditional imports                             | ❌          |
 | Lazy imports (inside functions)                 | ❌          |
 | Better circular import reporting                | ❌          |
 | Official documentation (website, PDF)           | ❌          |
-| Python UX libraries via `using` (e.g., os)      | ❌          |
 | Full `async` / `await` support                  | ❌          |
 | Self-hosting                                    | ❌          |
 | NuGet package                                   | ❌          |
