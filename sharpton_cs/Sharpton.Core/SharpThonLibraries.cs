@@ -44,7 +44,7 @@ public static class SharpThonLibraries
             "sys" => SysBody,
             "random" => RandomBody,
             "math" => MathBody,
-            "time" => TimeBody,
+            "time" => TimeFormattingBody + TimeBody,
             _ => ""
         };
     }
@@ -77,9 +77,8 @@ public static class SharpThonOs
 
     public static string[] listdir(string path = ".") =>
         System.IO.Directory.GetFileSystemEntries(path)
-            .Select(System.IO.Path.GetFileName)
-            .Where(x => x != null)
-            .Cast<string>()
+            .Select(x => System.IO.Path.GetFileName(x) ?? "")
+            .Where(x => x.Length > 0)
             .ToArray();
 
     public static void mkdir(string path) => System.IO.Directory.CreateDirectory(path);
@@ -134,6 +133,8 @@ public static class SharpThonOs
 
     public static string join(string a, string b) => System.IO.Path.Combine(a, b);
 
+    public static readonly PathApi path = new();
+
     public static System.Collections.Generic.List<SharpThonOsWalkEntry> walk(string top)
     {
         var result = new System.Collections.Generic.List<SharpThonOsWalkEntry>();
@@ -147,29 +148,35 @@ public static class SharpThonOs
         return result;
     }
 
-    public static class path
+    public sealed class PathApi
     {
-        public static bool exists(string value) => System.IO.File.Exists(value) || System.IO.Directory.Exists(value);
-        public static bool lexists(string value) => exists(value);
-        public static bool isfile(string value) => System.IO.File.Exists(value);
-        public static bool isdir(string value) => System.IO.Directory.Exists(value);
-        public static bool isabs(string value) => System.IO.Path.IsPathRooted(value);
-        public static bool islink(string value) =>
+        public bool exists(string value) => System.IO.File.Exists(value) || System.IO.Directory.Exists(value);
+        public bool lexists(string value) => exists(value);
+        public bool isfile(string value) => System.IO.File.Exists(value);
+        public bool isdir(string value) => System.IO.Directory.Exists(value);
+        public bool isabs(string value) => System.IO.Path.IsPathRooted(value);
+        public bool islink(string value) =>
             System.IO.File.Exists(value) &&
             (System.IO.File.GetAttributes(value) & System.IO.FileAttributes.ReparsePoint) != 0;
-        public static string join(string a, string b) => System.IO.Path.Combine(a, b);
-        public static string dirname(string value) => System.IO.Path.GetDirectoryName(value) ?? "";
-        public static string basename(string value) => System.IO.Path.GetFileName(value);
-        public static string abspath(string value) => System.IO.Path.GetFullPath(value);
-        public static string realpath(string value) => System.IO.Path.GetFullPath(value);
-        public static string normpath(string value) => System.IO.Path.GetFullPath(value);
-        public static string normcase(string value) => System.OperatingSystem.IsWindows() ? value.ToLowerInvariant() : value;
-        public static string relpath(string value, string start = ".") => System.IO.Path.GetRelativePath(start, value);
-        public static string[] split(string value)
+        public string join(string a, string b) => System.IO.Path.Combine(a, b);
+        public string dirname(string value) => System.IO.Path.GetDirectoryName(value) ?? "";
+        public string basename(string value) => System.IO.Path.GetFileName(value) ?? "";
+        public string abspath(string value) => System.IO.Path.GetFullPath(value);
+        public string realpath(string value) => System.IO.Path.GetFullPath(value);
+        public string normpath(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return ".";
+            var full = System.IO.Path.GetFullPath(value);
+            if (System.IO.Path.IsPathRooted(value)) return full;
+            return System.IO.Path.GetRelativePath(System.Environment.CurrentDirectory, full);
+        }
+        public string normcase(string value) => System.OperatingSystem.IsWindows() ? value.ToLowerInvariant() : value;
+        public string relpath(string value, string start = ".") => System.IO.Path.GetRelativePath(start, value);
+        public string[] split(string value)
         {
             return new[] { dirname(value), basename(value) };
         }
-        public static string splitext(string value)
+        public string splitext(string value)
         {
             var extension = System.IO.Path.GetExtension(value);
             return value[..(value.Length - extension.Length)] + "|" + extension;
@@ -671,6 +678,57 @@ public static class SharpThonMath
 }
 """;
 
+    private const string TimeFormattingBody = """
+public static class SharpThonTimeFormatting
+{
+    public static string Format(string format, System.DateTimeOffset value)
+    {
+        var result = new System.Text.StringBuilder();
+
+        for (var i = 0; i < format.Length; i++)
+        {
+            if (format[i] != '%' || i + 1 >= format.Length)
+            {
+                result.Append(format[i]);
+                continue;
+            }
+
+            var code = format[++i];
+            result.Append(code switch
+            {
+                '%' => "%",
+                'Y' => value.ToString("yyyy", System.Globalization.CultureInfo.InvariantCulture),
+                'y' => value.ToString("yy", System.Globalization.CultureInfo.InvariantCulture),
+                'm' => value.ToString("MM", System.Globalization.CultureInfo.InvariantCulture),
+                'd' => value.ToString("dd", System.Globalization.CultureInfo.InvariantCulture),
+                'e' => value.Day.ToString().PadLeft(2, ' '),
+                'H' => value.ToString("HH", System.Globalization.CultureInfo.InvariantCulture),
+                'I' => value.ToString("hh", System.Globalization.CultureInfo.InvariantCulture),
+                'M' => value.ToString("mm", System.Globalization.CultureInfo.InvariantCulture),
+                'S' => value.ToString("ss", System.Globalization.CultureInfo.InvariantCulture),
+                'f' => value.ToString("ffffff", System.Globalization.CultureInfo.InvariantCulture),
+                'j' => value.DayOfYear.ToString("000", System.Globalization.CultureInfo.InvariantCulture),
+                'w' => (((int)value.DayOfWeek)).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                'u' => (((int)value.DayOfWeek + 6) % 7 + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                'a' => value.ToString("ddd", System.Globalization.CultureInfo.InvariantCulture),
+                'A' => value.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture),
+                'b' => value.ToString("MMM", System.Globalization.CultureInfo.InvariantCulture),
+                'B' => value.ToString("MMMM", System.Globalization.CultureInfo.InvariantCulture),
+                'p' => value.ToString("tt", System.Globalization.CultureInfo.InvariantCulture),
+                'z' => value.ToString("zzz", System.Globalization.CultureInfo.InvariantCulture).Replace(":", ""),
+                'Z' => value.ToString("zzz", System.Globalization.CultureInfo.InvariantCulture),
+                'x' => value.ToString("MM/dd/yy", System.Globalization.CultureInfo.InvariantCulture),
+                'X' => value.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture),
+                'c' => value.ToString("ddd MMM dd HH:mm:ss yyyy", System.Globalization.CultureInfo.InvariantCulture),
+                _ => "%" + code
+            });
+        }
+
+        return result.ToString();
+    }
+}
+""";
+
     private const string TimeBody = """
 public static class SharpThonTime
 {
@@ -712,7 +770,7 @@ public static class SharpThonTime
     }
 
     public static string strftime(string format, SharpThonTimeStruct value) =>
-        value.value.ToString(format, System.Globalization.CultureInfo.InvariantCulture);
+        SharpThonTimeFormatting.Format(format, value.value);
 
     public static void sleep_ms(long milliseconds)
     {
@@ -739,7 +797,7 @@ public sealed class SharpThonTimeStruct
     public int tm_hour => value.Hour;
     public int tm_min => value.Minute;
     public int tm_sec => value.Second;
-    public int tm_wday => (int)value.DayOfWeek;
+    public int tm_wday => ((int)value.DayOfWeek + 6) % 7;
     public int tm_yday => value.DayOfYear;
     public int tm_isdst => 0;
 }

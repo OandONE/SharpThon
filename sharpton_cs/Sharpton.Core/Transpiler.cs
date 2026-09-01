@@ -131,6 +131,8 @@ public class Transpiler
         if (moduleBodies.Count == 0)
         {
             var onlyMain = new StringBuilder(mainCode);
+            onlyMain.AppendLine();
+            onlyMain.AppendLine(GetSharpThonRuntimeBody());
             AppendRequiredLibraryBodies(onlyMain);
             return onlyMain.ToString();
         }
@@ -202,6 +204,8 @@ public class Transpiler
             result.AppendLine(string.Join("\n\n", moduleBodies));
         }
 
+        result.AppendLine();
+        result.AppendLine(GetSharpThonRuntimeBody());
         AppendRequiredLibraryBodies(result);
 
         return result.ToString();
@@ -226,6 +230,17 @@ public class Transpiler
         {
             var noModuleCode = new List<string>(mainCode.Split('\n'));
             var noModuleSources = new List<int>(sourceLineNumbers);
+
+            // Write() uses SharpThonRuntime.Format() for Python-style
+            // collection/bool/null formatting, so the runtime helper must
+            // also be emitted when the source has only `require` statements
+            // and no .spy modules.
+            foreach (var line in GetSharpThonRuntimeBody().Split('\n'))
+            {
+                noModuleCode.Add(line);
+                noModuleSources.Add(1);
+            }
+
             AppendRequiredLibraryLines(noModuleCode, noModuleSources);
             return (string.Join("\n", noModuleCode), noModuleSources);
         }
@@ -308,6 +323,12 @@ public class Transpiler
                 newSourceLines.Add(1);
         }
 
+        foreach (var line in GetSharpThonRuntimeBody().Split('\n'))
+        {
+            newCode.Add(line);
+            newSourceLines.Add(1);
+        }
+
         AppendRequiredLibraryLines(newCode, newSourceLines);
 
         return (string.Join("\n", newCode), newSourceLines);
@@ -388,8 +409,47 @@ public class Transpiler
             );
         }
 
+        // Common Python idiom: re.match(...).group().
+        // The Python expression is safe when the match is known to succeed;
+        // use C#'s null-forgiving operator here to avoid a nullable warning
+        // without changing the runtime null behavior for other expressions.
+        processed = Regex.Replace(
+            processed,
+            @"(\bSharpThonRe\.match\((?:[^()]|\([^()]*\))*\))\.group\(",
+            "$1!.group("
+        );
+
         return processed;
     }
+
+    private static string GetSharpThonRuntimeBody() => """
+public static class SharpThonRuntime
+{
+    public static string Format(object? value)
+    {
+        if (value is null) return "None";
+        if (value is string text) return text;
+        if (value is bool b) return b ? "True" : "False";
+
+        if (value is System.Collections.IDictionary dictionary)
+        {
+            var parts = new System.Collections.Generic.List<string>();
+            foreach (System.Collections.DictionaryEntry entry in dictionary)
+                parts.Add("\"" + Format(entry.Key) + "\": " + Format(entry.Value));
+            return "{" + string.Join(", ", parts) + "}";
+        }
+
+        if (value is System.Collections.IEnumerable enumerable && value is not byte[])
+        {
+            var parts = new System.Collections.Generic.List<string>();
+            foreach (var item in enumerable) parts.Add(Format(item));
+            return "[" + string.Join(", ", parts) + "]";
+        }
+
+        return value.ToString() ?? "None";
+    }
+}
+""";
 
     private void AppendRequiredLibraryBodies(StringBuilder builder)
     {
@@ -2310,13 +2370,11 @@ public class Transpiler
                     if (depth < 0)
                     {
                         return
-                            $"Console.WriteLine(" +
-                            $"{inner[..i]});";
+                            $"Console.WriteLine(SharpThonRuntime.Format({inner[..i]}));";
                     }
                 }
 
-                return
-                    $"Console.WriteLine({inner});";
+                return $"Console.WriteLine(SharpThonRuntime.Format({inner}));";
             }
         );
 

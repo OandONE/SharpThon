@@ -67,6 +67,7 @@ if (age == 16) {
 * ✅ Classes — fields, constructors, methods, access modifiers, and `this`
 * ✅ Comments — supports `#` and preserves inline `//` comments
 * ✅ Module imports — import other `.spy` files as modules
+* ✅ External libraries — `require os`, `require json`, `require re`, `require sys`, `require random`, `require math`, `require time`
 * ✅ `using` — import .NET namespaces
 * ✅ .NET namespace imports
 * ✅ C#/.NET interoperability
@@ -91,9 +92,10 @@ if (age == 16) {
 * ✅ Interfaces — `interface` and `:` implementation
 * ✅ Class hoisting — classes are moved to the end of generated code (Python-like)
 * ✅ Multi-module imports — `import os, sys, math`
-* ✅ Relative imports — `import "../utils/math"`
-* ✅ Import aliases — `import x as y`
-* ✅ From imports — `from x import y`
+* ✅ Relative imports — `import "../utils/math"` and `import "./utils/math"`
+* ✅ Import aliases — `import "./utils/math" as math`
+* ✅ Quoted/path imports — supports `import "utils/math"`, `import "utils/math.spy"`, and dotted relative paths such as `import ..utils.math`
+* ✅ `from` imports — supports `from "utils/math.spy" import add`, aliases, and the same path forms as `import`
 
 ---
 
@@ -343,6 +345,120 @@ def add(x: int, y: int) -> int {
 }
 ```
 
+### Relative Imports
+
+Relative imports resolve from the directory of the file containing the import.
+Use a quoted path beginning with `./` or `../`. The `.spy` extension is optional.
+
+**Project structure:**
+
+```text
+project/
+├── main.spy
+├── utils/
+│   └── math.spy
+└── features/
+    └── stats.spy
+```
+
+**main.spy:**
+
+```spy
+import "./utils/math"
+
+result = math.add(10, 20)
+Write(result)
+```
+
+From a nested module, parent directories work as expected:
+
+```spy
+// features/stats.spy
+import "../utils/math"
+
+result = math.add(2, 3)
+```
+
+A relative import can also target a package directory; SharpThon loads its
+`index.spy` entry point automatically.
+
+Relative imports are resolved per source file, so nested imports do not
+accidentally resolve against the entry file's directory.
+
+### Import Aliases
+
+Use `as` to choose the name used to reference an imported module. This works with regular, quoted, extension-based, and relative imports.
+
+```spy
+import "./utils/math" as math
+import "utils/math.spy" as math2
+
+result = math.add(10, 20)
+```
+
+Aliases are useful when multiple modules have the same basename or when you want a clearer module name.
+
+### Quoted and Dotted Import Paths
+
+SharpThon accepts several equivalent path forms for module imports. The `.spy` extension is optional.
+
+```spy
+import "utils/math"
+import "utils/math.spy"
+import ..utils.math
+import "..utils.math"
+```
+
+The same path forms are accepted by `from` imports and can be combined with aliases:
+
+```spy
+from "../utils/math.spy" import add
+from ..utils.math import add as sum
+from "utils/math" import add as plus
+```
+
+Multiple imports can also be mixed on one line:
+
+```spy
+import "./utils/math" as math, os as operating_system
+```
+
+### From Imports
+
+Import specific functions or classes from a module without using the module prefix.
+
+```spy
+from TestImportModule import add
+
+result = add(10, 20)
+Write(result)
+```
+
+Multiple members are supported:
+
+```spy
+from TestImportModule import add, multiply
+
+Write(add(10, 20))
+Write(multiply(5, 5))
+```
+
+Relative modules work as well:
+
+```spy
+from "../utils/math" import add
+
+result = add(10, 20)
+```
+
+A selected member can also be renamed with an alias:
+
+```spy
+from "../utils/math" import add as sum
+
+result = sum(10, 20)
+```
+
 ### Package Entry File (`index.spy`)
 
 When importing a folder as a package, SharpThon automatically looks for an `index.spy` file inside that folder and runs it as the entry point.
@@ -373,6 +489,45 @@ Package 'my_package' does not contain an index.spy file.
 ```
 
 This is similar to `index.js` in Node.js or `__init__.py` in Python, but simpler and more explicit.
+
+### External Libraries (`require`)
+
+SharpThon reserves `import` and `from` for `.spy` modules. Use `require` for built-in/external library compatibility layers.
+
+```spy
+require os
+require json
+require re
+require sys
+require random
+require math
+require time
+
+Write(os.getcwd())
+Write(math.sqrt(25))
+Write(time.time())
+```
+
+The first built-in compatibility libraries are:
+
+- `os` — filesystem, environment, process, and `os.path` helpers
+- `json` — `loads()`, `load()`, `dumps()`, and `dump()`
+- `re` — matching, searching, compiled patterns, iteration, substitution, splitting, and escaping
+- `sys` — command-line arguments, runtime information, environment access, and process helpers
+- `random` — seeding, random values, integer ranges, sequence selection, shuffling, sampling, and common distributions
+- `math` — constants and common numeric, trigonometric, logarithmic, rounding, combinatoric, and comparison functions
+- `time` — wall-clock time, nanosecond time, monotonic/performance clocks, `ctime()`, `localtime()`, `gmtime()`, `strftime()`, and `sleep()`
+
+The compatibility layer is implemented in `SharpThonLibraries.cs`, keeping library code separate from the main transpiler. The API surface is intentionally Python-shaped while using .NET 8 underneath; it is not a byte-for-byte implementation of the entire CPython standard library.
+
+Aliases are also accepted:
+
+```spy
+require math as m
+Write(m.sqrt(16))
+```
+
+`using` remains reserved for .NET namespaces, while `import` / `from` remain the SharpThon module system.
 
 ### Using .NET Namespaces
 
@@ -790,38 +945,6 @@ my_var.move(1)
 
 The transpiler converts this to C# `interface` and `class : interface` syntax.
 
-### Relative Imports
-
-Import files from other directories using quoted paths:
-
-```spy
-import "../utils/math_utils"
-import "./helpers/string_utils"
-import "../../core/database"
-```
-
-### Import Aliases
-
-Give a module a shorter name:
-
-```spy
-import very_long_module_name as vl
-import math_utils as mu
-
-result = mu.add(10, 20)
-```
-
-### From Imports
-
-Import specific items from a module:
-
-```spy
-from math_utils import add, multiply
-from my_package import *
-```
-
-Only the specified functions/classes are imported. `*` imports everything.
-
 ### CI/CD
 
 Every push to GitHub automatically runs build and tests via GitHub Actions.
@@ -902,17 +1025,18 @@ SharpThon/
 | LINQ / Lambda expressions                       | ✅ Complete |
 | Interfaces                                      | ✅ Complete |
 | Multi-module import (`import a, b, c`)          | ✅ Complete |
+| External libraries (`require`)                   | ✅ Complete |
+| VS Code Extension (LSP)                        | 🚧 In Progress |
 | Relative imports (`"../utils/math"`)            | ✅ Complete |
 | Import aliases (`import x as y`)                | ✅ Complete |
 | `from` imports (`from x import y`)              | ✅ Complete |
-| Module caching                                  | ✅ Complete |
-| Quoted imports with extension                   | ✅ Complete |
-| Python UX libraries via `using` (e.g., os)      | ✅ Complete |
-| VS Code Extension (LSP)                        | 🚧 In Progress |
 | Conditional imports                             | ❌          |
 | Lazy imports (inside functions)                 | ❌          |
+| Quoted imports with extension                   | ✅ Complete |
+| Module caching                                  | ✅ Complete |
 | Better circular import reporting                | ❌          |
 | Official documentation (website, PDF)           | ❌          |
+| Python UX libraries via `require` (`os`, `json`, `re`, `sys`, `random`, `math`, `time`) | ✅ Complete |
 | Full `async` / `await` support                  | ❌          |
 | Self-hosting                                    | ❌          |
 | NuGet package                                   | ❌          |
