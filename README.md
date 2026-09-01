@@ -867,8 +867,8 @@ SharpThon/
 | LINQ / Lambda expressions                       | ✅ Complete |
 | Interfaces                                      | ✅ Complete |
 | Multi-module import (`import a, b, c`)          | ✅ Complete |
+| Relative imports (`"../utils/math"`)            | ✅ Complete |
 | VS Code Extension (LSP)                        | 🚧 In Progress |
-| Relative imports (`"../utils/math"`)            | ❌          |
 | Import aliases (`import x as y`)                | ❌          |
 | `from` imports (`from x import y`)              | ❌          |
 | Conditional imports                             | ❌          |

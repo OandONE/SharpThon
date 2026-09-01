@@ -55,7 +55,6 @@ public class Transpiler
     private string? currentInterface;
     private int currentTypeBraceDepth;
     private int sourceBraceDepth;
-    private string? sourceDirectory;
 
     // Prevents circular imports:
     // A -> B -> A
@@ -72,7 +71,6 @@ public class Transpiler
 
     public string TranspileFile(string filepath)
     {
-        sourceDirectory = Path.GetDirectoryName(Path.GetFullPath(filepath))!;
         InitializeImportTracking(filepath);
 
         var spCode = File.ReadAllText(filepath);
@@ -87,10 +85,11 @@ public class Transpiler
         if (moduleBodies.Count == 0)
             return mainCode;
 
-        // Separate using directives from the main code
+        var lines = mainCode.Split('\n');
         var usingLines = new List<string>();
         var nonUsingLines = new List<string>();
-        foreach (var line in mainCode.Split('\n'))
+
+        foreach (var line in lines)
         {
             var trimmed = line.Trim();
             if (trimmed.StartsWith("using ", StringComparison.Ordinal))
@@ -99,33 +98,52 @@ public class Transpiler
                 nonUsingLines.Add(line);
         }
 
-        // Remove extra top-level main(); call
-        var filteredNonUsingLines = nonUsingLines
+        // Remove the generated top-level main() call if one exists.
+        nonUsingLines = nonUsingLines
             .Where(line => !Regex.IsMatch(line.Trim(), @"^main\(\);\s*$"))
             .ToList();
 
-        // Change main method access modifier to public
-        for (int i = 0; i < filteredNonUsingLines.Count; i++)
-        {
-            var line = filteredNonUsingLines[i];
-            if (Regex.IsMatch(line.Trim(), @"^static\s+void\s+main\s*\("))
-            {
-                filteredNonUsingLines[i] = line.Replace(
-                    "static void main(",
-                    "public static void main("
-                );
-            }
-        }
+        var split = SplitTopLevelProgramCode(nonUsingLines);
+
+        // A user-defined `main` is kept as a normal member.
+        // Otherwise we create a synthetic main() containing top-level statements.
+        bool hasUserMain = split.MemberLines.Any(line =>
+            Regex.IsMatch(
+                line.Trim(),
+                @"^(?:(?:public|private|protected|static)\s+)*void\s+main\s*\("
+            ));
 
         var result = new StringBuilder();
-        // 1. all USINGs
         result.AppendLine(string.Join("\n", usingLines));
-        // 2. Call wrapper at top-level
+
+        // Entry point for top-level SharpThon statements.
         result.AppendLine("SharpThonProgram.main();");
-        // 3. Class wrapper
         result.AppendLine("public static class SharpThonProgram");
         result.AppendLine("{");
-        result.AppendLine(string.Join("\n", filteredNonUsingLines));
+
+        if (!hasUserMain)
+        {
+            result.AppendLine("public static void main()");
+            result.AppendLine("{");
+            result.AppendLine(string.Join("\n", split.MainLines));
+            result.AppendLine("}");
+        }
+
+        foreach (var memberLine in split.MemberLines)
+        {
+            var line = memberLine;
+            if (Regex.IsMatch(line.Trim(), @"^(?:public\s+)?static\s+void\s+main\s*\("))
+            {
+                line = line.Replace(
+                    "static void main(",
+                    "public static void main(",
+                    StringComparison.Ordinal
+                );
+            }
+
+            result.AppendLine(line);
+        }
+
         result.AppendLine("}");
         // 4. modules
         if (moduleBodies.Count > 0)
@@ -139,7 +157,6 @@ public class Transpiler
 
     public (string Code, List<int> SourceLineNumbers) TranspileFileWithMapping(string filepath)
     {
-        sourceDirectory = Path.GetDirectoryName(Path.GetFullPath(filepath))!;
         InitializeImportTracking(filepath);
 
         var spCode = File.ReadAllText(filepath);
@@ -156,66 +173,68 @@ public class Transpiler
         if (moduleBodies.Count == 0)
             return (mainCode, sourceLineNumbers);
 
-        var usingLines = new List<string>();
-        var nonUsingLines = new List<string>();
-        var usingSourceLines = new List<int>();
-        var nonUsingSourceLines = new List<int>();
+        var usingPairs = new List<(string Line, int Source)>();
+        var nonUsingPairs = new List<(string Line, int Source)>();
+
         var lines = mainCode.Split('\n');
         for (int i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
             var trimmed = line.Trim();
             if (trimmed.StartsWith("using ", StringComparison.Ordinal))
-            {
-                usingLines.Add(line);
-                usingSourceLines.Add(sourceLineNumbers[i]);
-            }
-            else
-            {
-                nonUsingLines.Add(line);
-                nonUsingSourceLines.Add(sourceLineNumbers[i]);
-            }
+                usingPairs.Add((line, sourceLineNumbers[i]));
+            else if (!Regex.IsMatch(trimmed, @"^main\(\);\s*$"))
+                nonUsingPairs.Add((line, sourceLineNumbers[i]));
         }
 
-        // Remove extra main();
-        var filteredPairs = nonUsingLines
-            .Select((line, idx) => new { Line = line, Source = nonUsingSourceLines[idx] })
-            .Where(pair => !Regex.IsMatch(pair.Line.Trim(), @"^main\(\);\s*$"))
-            .ToList();
-
-        // Change main method to public
-        for (int i = 0; i < filteredPairs.Count; i++)
-        {
-            var pair = filteredPairs[i];
-            if (Regex.IsMatch(pair.Line.Trim(), @"^static\s+void\s+main\s*\("))
-            {
-                pair = new
-                {
-                    Line = pair.Line.Replace("static void main(", "public static void main("),
-                    Source = pair.Source
-                };
-                filteredPairs[i] = pair;
-            }
-        }
+        var pairSplit = SplitTopLevelProgramCodeWithMapping(nonUsingPairs);
+        bool hasUserMain = pairSplit.MemberLines.Any(pair =>
+            Regex.IsMatch(
+                pair.Line.Trim(),
+                @"^(?:(?:public|private|protected|static)\s+)*void\s+main\s*\("
+            ));
 
         var newCode = new List<string>();
         var newSourceLines = new List<int>();
 
-        // USINGs
-        newCode.AddRange(usingLines);
-        newSourceLines.AddRange(usingSourceLines);
+        newCode.AddRange(usingPairs.Select(x => x.Line));
+        newSourceLines.AddRange(usingPairs.Select(x => x.Source));
 
-        // top-level call
         newCode.Add("SharpThonProgram.main();");
         newSourceLines.Add(1);
-
-        // Class wrapper
         newCode.Add("public static class SharpThonProgram");
         newSourceLines.Add(1);
         newCode.Add("{");
         newSourceLines.Add(1);
-        newCode.AddRange(filteredPairs.Select(p => p.Line));
-        newSourceLines.AddRange(filteredPairs.Select(p => p.Source));
+
+        if (!hasUserMain)
+        {
+            newCode.Add("public static void main()");
+            newSourceLines.Add(1);
+            newCode.Add("{");
+            newSourceLines.Add(1);
+            newCode.AddRange(pairSplit.MainLines.Select(x => x.Line));
+            newSourceLines.AddRange(pairSplit.MainLines.Select(x => x.Source));
+            newCode.Add("}");
+            newSourceLines.Add(1);
+        }
+
+        foreach (var pair in pairSplit.MemberLines)
+        {
+            var line = pair.Line;
+            if (Regex.IsMatch(line.Trim(), @"^(?:public\s+)?static\s+void\s+main\s*\("))
+            {
+                line = line.Replace(
+                    "static void main(",
+                    "public static void main(",
+                    StringComparison.Ordinal
+                );
+            }
+
+            newCode.Add(line);
+            newSourceLines.Add(pair.Source);
+        }
+
         newCode.Add("}");
         newSourceLines.Add(1);
 
@@ -262,6 +281,13 @@ public class Transpiler
     {
         var moduleBodies = new List<string>();
         var moduleMap = new Dictionary<string, string>();
+        var moduleReferenceMap = new Dictionary<string, string>();
+
+        // Imports are resolved relative to the file that contains the import.
+        // This is important for nested modules: moduleA/index.spy should resolve
+        // ../utils/math from moduleA/, not from the entry file's directory.
+        var importingDirectory =
+            Path.GetDirectoryName(Path.GetFullPath(sourceFile))!;
 
         foreach (Match match in ModuleImportRegex.Matches(spCode))
         {
@@ -273,51 +299,41 @@ public class Transpiler
 
             foreach (var moduleName in moduleNames)
             {
-                var moduleParts = moduleName.Split('.');
-                var packagePath = Path.GetFullPath(
-                    Path.Combine(sourceDirectory!, Path.Combine(moduleParts))
+                var isRelative = IsRelativeImport(moduleName);
+                var moduleReferenceName = GetModuleReferenceName(moduleName);
+                var modulePath = ResolveModulePath(
+                    importingDirectory,
+                    moduleName,
+                    out var isPackage
                 );
 
-                string modulePath;
-
-                if (Directory.Exists(packagePath))
+                if (!File.Exists(modulePath))
                 {
-                    modulePath = Path.Combine(packagePath, "index.spy");
-                    if (!File.Exists(modulePath))
+                    var importErrorLineNumber =
+                        spCode[..match.Index].Count(c => c == '\n') + 1;
+
+                    if (isPackage)
                     {
-                        var missingPackageLineNumber =
-                            spCode[..match.Index].Count(c => c == '\n') + 1;
                         throw new SharpThonImportException(
                             sourceFile,
-                            missingPackageLineNumber,
+                            importErrorLineNumber,
                             moduleName,
                             isPackage: true
                         );
                     }
-                }
-                else
-                {
-                    modulePath = Path.GetFullPath(
-                        Path.Combine(
-                            sourceDirectory!,
-                            Path.Combine(moduleParts) + ".spy"
-                        )
+
+                    throw new SharpThonImportException(
+                        sourceFile,
+                        importErrorLineNumber,
+                        moduleName + (isRelative ? "" : ".spy")
                     );
-
-                    if (!File.Exists(modulePath))
-                    {
-                        var missingModuleLineNumber =
-                            spCode[..match.Index].Count(c => c == '\n') + 1;
-                        throw new SharpThonImportException(
-                            sourceFile,
-                            missingModuleLineNumber,
-                            moduleName + ".spy"
-                        );
-                    }
                 }
 
-                var className = ToPascalCase(moduleName);
+                // Relative paths are referenced in SharpThon by their file/directory
+                // name, e.g. import "../utils/math" -> math.add(...).
+                var className = ToPascalCase(moduleReferenceName);
                 moduleMap[moduleName] = className;
+                moduleReferenceMap[moduleName] = moduleReferenceName;
 
                 var lineNumber =
                     spCode[..match.Index].Count(c => c == '\n') + 1;
@@ -360,7 +376,7 @@ public class Transpiler
             }
         }
 
-        // convert lines import to using static
+        // Convert import lines to using static.
         var lines = spCode.Split('\n');
         var newLines = new List<string>();
 
@@ -402,17 +418,202 @@ public class Transpiler
 
         var processedCode = string.Join("\n", newLines);
 
-        // Replace module name by class name in codes
+        // Replace module references by generated class names. For a relative
+        // import, the source reference is the basename (math), not the path
+        // (../utils/math), because the latter is not a valid identifier.
         foreach (var (moduleName, className) in moduleMap)
         {
+            var referenceName = moduleReferenceMap[moduleName];
             processedCode = Regex.Replace(
                 processedCode,
-                $@"\b{Regex.Escape(moduleName)}\.",
+                $@"\b{Regex.Escape(referenceName)}\.",
                 $"{className}."
             );
         }
 
         return (processedCode, moduleBodies);
+    }
+
+    private static bool IsRelativeImport(string moduleName)
+    {
+        var path = UnquoteImportPath(moduleName);
+        return path.StartsWith("./", StringComparison.Ordinal) ||
+               path.StartsWith("../", StringComparison.Ordinal) ||
+               path.StartsWith(".\\", StringComparison.Ordinal) ||
+               path.StartsWith("..\\", StringComparison.Ordinal);
+    }
+
+    private static string UnquoteImportPath(string moduleName)
+    {
+        var value = moduleName.Trim();
+        if (value.Length >= 2 &&
+            value[0] == '"' &&
+            value[^1] == '"')
+        {
+            return value[1..^1];
+        }
+
+        return value;
+    }
+
+    private static string GetModuleReferenceName(string moduleName)
+    {
+        var path = UnquoteImportPath(moduleName)
+            .Replace('\\', '/')
+            .TrimEnd('/');
+
+        if (!IsRelativeImport(moduleName))
+            return path;
+
+        var fileName = Path.GetFileName(path);
+        if (fileName.EndsWith(".spy", StringComparison.OrdinalIgnoreCase))
+            fileName = fileName[..^4];
+
+        return fileName;
+    }
+
+    private static string ResolveModulePath(
+        string importingDirectory,
+        string moduleName,
+        out bool isPackage)
+    {
+        isPackage = false;
+
+        if (IsRelativeImport(moduleName))
+        {
+            var relativePath = UnquoteImportPath(moduleName)
+                .Replace('\\', Path.DirectorySeparatorChar);
+
+            var candidate = Path.GetFullPath(
+                Path.Combine(importingDirectory, relativePath)
+            );
+
+            if (Directory.Exists(candidate))
+            {
+                isPackage = true;
+                return Path.Combine(candidate, "index.spy");
+            }
+
+            if (File.Exists(candidate))
+                return candidate;
+
+            if (!candidate.EndsWith(".spy", StringComparison.OrdinalIgnoreCase))
+                return candidate + ".spy";
+
+            return candidate;
+        }
+
+        var moduleParts = moduleName.Split('.');
+        var packagePath = Path.GetFullPath(
+            Path.Combine(importingDirectory, Path.Combine(moduleParts))
+        );
+
+        if (Directory.Exists(packagePath))
+        {
+            isPackage = true;
+            return Path.Combine(packagePath, "index.spy");
+        }
+
+        return Path.GetFullPath(
+            Path.Combine(
+                importingDirectory,
+                Path.Combine(moduleParts) + ".spy"
+            )
+        );
+    }
+
+    private sealed class ProgramCodeSplit
+    {
+        public List<string> MemberLines { get; } = new();
+        public List<string> MainLines { get; } = new();
+    }
+
+    private sealed class ProgramCodeSplitWithMapping
+    {
+        public List<(string Line, int Source)> MemberLines { get; } = new();
+        public List<(string Line, int Source)> MainLines { get; } = new();
+    }
+
+    private static ProgramCodeSplit SplitTopLevelProgramCode(IEnumerable<string> sourceLines)
+    {
+        var split = new ProgramCodeSplit();
+        var lines = sourceLines.ToList();
+
+        int depth = 0;
+        bool inMemberBlock = false;
+        int memberStartDepth = 0;
+        var memberKinds = new Regex(
+            @"^(?:(?:public|private|protected|static|abstract|sealed|partial)\s+)*(?:class|interface)\b|^(?:(?:public|private|protected|static)\s+)*def\s+",
+            RegexOptions.Compiled
+        );
+
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+
+            if (depth == 0 && !inMemberBlock && memberKinds.IsMatch(trimmed))
+            {
+                inMemberBlock = true;
+                memberStartDepth = depth;
+                split.MemberLines.Add(line);
+            }
+            else if (inMemberBlock)
+            {
+                split.MemberLines.Add(line);
+            }
+            else
+            {
+                split.MainLines.Add(line);
+            }
+
+            depth += CountBraces(line, '{') - CountBraces(line, '}');
+
+            if (inMemberBlock && depth <= memberStartDepth)
+                inMemberBlock = false;
+        }
+
+        return split;
+    }
+
+    private static ProgramCodeSplitWithMapping SplitTopLevelProgramCodeWithMapping(
+        IEnumerable<(string Line, int Source)> sourceLines)
+    {
+        var split = new ProgramCodeSplitWithMapping();
+        int depth = 0;
+        bool inMemberBlock = false;
+        int memberStartDepth = 0;
+
+        var memberKinds = new Regex(
+            @"^(?:(?:public|private|protected|static|abstract|sealed|partial)\s+)*(?:class|interface)\b|^(?:(?:public|private|protected|static)\s+)*def\s+",
+            RegexOptions.Compiled
+        );
+
+        foreach (var pair in sourceLines)
+        {
+            var trimmed = pair.Line.Trim();
+
+            if (depth == 0 && !inMemberBlock && memberKinds.IsMatch(trimmed))
+            {
+                inMemberBlock = true;
+                memberStartDepth = depth;
+                split.MemberLines.Add(pair);
+            }
+            else if (inMemberBlock)
+            {
+                split.MemberLines.Add(pair);
+            }
+            else
+            {
+                split.MainLines.Add(pair);
+            }
+
+            depth += CountBraces(pair.Line, '{') - CountBraces(pair.Line, '}');
+
+            if (inMemberBlock && depth <= memberStartDepth)
+                inMemberBlock = false;
+        }
+
+        return split;
     }
 
     private string TranspileModule(string modulePath, string className)
@@ -481,7 +682,7 @@ public class Transpiler
 
     private static readonly Regex ModuleImportRegex =
         new(
-            @"^import\s+([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)*)$",
+            @"^import\s+((?:""(?:\./|\.\./|\.\\|\.\.\\)[^""]+""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)(?:\s*,\s*(?:""(?:\./|\.\./|\.\\|\.\.\\)[^""]+""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*))*)$",
             RegexOptions.Multiline
         );
 
