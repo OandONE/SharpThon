@@ -869,8 +869,8 @@ SharpThon/
 | Multi-module import (`import a, b, c`)          | ✅ Complete |
 | Relative imports (`"../utils/math"`)            | ✅ Complete |
 | Import aliases (`import x as y`)                | ✅ Complete |
+| `from` imports (`from x import y`)              | ✅ Complete |
 | VS Code Extension (LSP)                        | 🚧 In Progress |
-| `from` imports (`from x import y`)              | ❌          |
 | Conditional imports                             | ❌          |
 | Lazy imports (inside functions)                 | ❌          |
 | Quoted imports with extension                   | ❌          |

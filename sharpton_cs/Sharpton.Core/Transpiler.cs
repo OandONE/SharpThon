@@ -279,6 +279,18 @@ public class Transpiler
         public string? Alias { get; init; }
     }
 
+    private sealed class FromImportSpec
+    {
+        public required string Name { get; init; }
+        public string? Alias { get; init; }
+    }
+
+    private sealed class FromImportBinding
+    {
+        public required string LocalName { get; init; }
+        public required string QualifiedName { get; init; }
+    }
+
     private (string processedCode, List<string> moduleBodies)
         ProcessImports(
             string spCode,
@@ -290,6 +302,7 @@ public class Transpiler
         var moduleReferenceMap = new Dictionary<string, string>(StringComparer.Ordinal);
         var moduleUsingMap = new Dictionary<string, bool>(StringComparer.Ordinal);
         var generatedClassByModulePath = new Dictionary<string, string>(StringComparer.Ordinal);
+        var fromImportBindings = new List<FromImportBinding>();
 
         // Imports are resolved relative to the file that contains the import.
         // This is important for nested modules: moduleA/index.spy should resolve
@@ -297,103 +310,96 @@ public class Transpiler
         var importingDirectory =
             Path.GetDirectoryName(Path.GetFullPath(sourceFile))!;
 
-        foreach (Match match in ModuleImportRegex.Matches(spCode))
+        string EnsureModuleLoaded(
+            string moduleName,
+            string? alias,
+            int matchIndex)
         {
-            var importList = ParseImportList(match.Groups[1].Value);
+            var isRelative = IsRelativeImport(moduleName);
+            var moduleReferenceName =
+                alias ?? GetModuleReferenceName(moduleName);
 
-            foreach (var import in importList)
+            var modulePath = ResolveModulePath(
+                importingDirectory,
+                moduleName,
+                out var isPackage
+            );
+
+            if (!File.Exists(modulePath))
             {
-                var moduleName = import.Path;
-                var isRelative = IsRelativeImport(moduleName);
-                var moduleReferenceName =
-                    import.Alias ?? GetModuleReferenceName(moduleName);
+                var importErrorLineNumber =
+                    spCode[..matchIndex].Count(c => c == '\n') + 1;
 
-                var modulePath = ResolveModulePath(
-                    importingDirectory,
-                    moduleName,
-                    out var isPackage
-                );
-
-                if (!File.Exists(modulePath))
+                if (isPackage)
                 {
-                    var importErrorLineNumber =
-                        spCode[..match.Index].Count(c => c == '\n') + 1;
-
-                    if (isPackage)
-                    {
-                        throw new SharpThonImportException(
-                            sourceFile,
-                            importErrorLineNumber,
-                            moduleName,
-                            isPackage: true
-                        );
-                    }
-
                     throw new SharpThonImportException(
                         sourceFile,
                         importErrorLineNumber,
-                        moduleName + (isRelative ? "" : ".spy")
+                        moduleName,
+                        isPackage: true
                     );
                 }
 
-                // Use the alias as the public SharpThon reference when one exists.
-                // Without an alias, preserve the existing behavior:
-                //   import ./utils/math -> math.add(...)
-                string uniqueClassName;
+                throw new SharpThonImportException(
+                    sourceFile,
+                    importErrorLineNumber,
+                    moduleName + (isRelative ? "" : ".spy")
+                );
+            }
 
-                // The same physical module may be imported more than once with
-                // different aliases. Emit the module only once and make all
-                // aliases point to that generated class.
-                if (generatedClassByModulePath.TryGetValue(modulePath, out var existingClassName))
+            string uniqueClassName;
+
+            // Reuse one generated class for the same physical module.
+            if (generatedClassByModulePath.TryGetValue(
+                    modulePath,
+                    out var existingClassName))
+            {
+                uniqueClassName = existingClassName;
+            }
+            else
+            {
+                uniqueClassName = ToPascalCase(moduleReferenceName);
+
+                var collisionIndex = 2;
+                var candidate = uniqueClassName;
+                while (generatedClassByModulePath.Values.Contains(
+                    candidate,
+                    StringComparer.Ordinal))
                 {
-                    uniqueClassName = existingClassName;
-                }
-                else
-                {
-                    uniqueClassName = ToPascalCase(moduleReferenceName);
-
-                    // Avoid generated class collisions when two different modules
-                    // use the same alias or basename.
-                    var collisionIndex = 2;
-                    var candidate = uniqueClassName;
-                    while (generatedClassByModulePath.Values.Contains(candidate, StringComparer.Ordinal))
-                    {
-                        candidate = ToPascalCase(
-                            $"{moduleReferenceName}_{collisionIndex++}"
-                        );
-                    }
-
-                    uniqueClassName = candidate;
-                    generatedClassByModulePath[modulePath] = uniqueClassName;
-                }
-
-                moduleMap[moduleName] = uniqueClassName;
-                moduleReferenceMap[moduleName] = moduleReferenceName;
-                moduleUsingMap[moduleName] = import.Alias == null;
-
-                var lineNumber =
-                    spCode[..match.Index].Count(c => c == '\n') + 1;
-
-                // Check circular import.
-                if (modulesInProgress.Contains(modulePath))
-                {
-                    var cycleStart = importPath.IndexOf(modulePath);
-                    var cycle = importPath
-                        .Skip(cycleStart)
-                        .Append(modulePath)
-                        .Select(path => Path.GetFileName(path)!)
-                        .ToList();
-
-                    throw new SharpThonCircularImportException(
-                        sourceFile,
-                        lineNumber,
-                        cycle
+                    candidate = ToPascalCase(
+                        $"{moduleReferenceName}_{collisionIndex++}"
                     );
                 }
 
-                if (visitedModules.Contains(modulePath))
-                    continue;
+                uniqueClassName = candidate;
+                generatedClassByModulePath[modulePath] = uniqueClassName;
+            }
 
+            moduleMap[moduleName] = uniqueClassName;
+            moduleReferenceMap[moduleName] = moduleReferenceName;
+            moduleUsingMap[moduleName] = alias == null;
+
+            var lineNumber =
+                spCode[..matchIndex].Count(c => c == '\n') + 1;
+
+            if (modulesInProgress.Contains(modulePath))
+            {
+                var cycleStart = importPath.IndexOf(modulePath);
+                var cycle = importPath
+                    .Skip(cycleStart)
+                    .Append(modulePath)
+                    .Select(path => Path.GetFileName(path)!)
+                    .ToList();
+
+                throw new SharpThonCircularImportException(
+                    sourceFile,
+                    lineNumber,
+                    cycle
+                );
+            }
+
+            if (!visitedModules.Contains(modulePath))
+            {
                 visitedModules.Add(modulePath);
                 modulesInProgress.Add(modulePath);
                 importPath.Add(modulePath);
@@ -410,6 +416,47 @@ public class Transpiler
                     modulesInProgress.Remove(modulePath);
                 }
             }
+
+            return uniqueClassName;
+        }
+
+        foreach (Match match in ModuleImportRegex.Matches(spCode))
+        {
+            var importList = ParseImportList(match.Groups[1].Value);
+
+            foreach (var import in importList)
+            {
+                EnsureModuleLoaded(
+                    import.Path,
+                    import.Alias,
+                    match.Index
+                );
+            }
+        }
+
+        // Process `from module import name[, name2]` forms.
+        foreach (Match match in FromImportRegex.Matches(spCode))
+        {
+            var moduleName = match.Groups["path"].Value;
+            var importedNames = ParseFromImportNames(
+                match.Groups["names"].Value
+            );
+
+            var className = EnsureModuleLoaded(
+                moduleName,
+                alias: null,
+                match.Index
+            );
+
+            foreach (var imported in importedNames)
+            {
+                var localName = imported.Alias ?? imported.Name;
+                fromImportBindings.Add(new FromImportBinding
+                {
+                    LocalName = localName,
+                    QualifiedName = $"{className}.{imported.Name}"
+                });
+            }
         }
 
         // Convert import lines to using static when no alias was supplied.
@@ -421,6 +468,11 @@ public class Transpiler
         foreach (var line in lines)
         {
             var trimmed = line.Trim();
+
+            var fromMatch = FromImportRegex.Match(trimmed);
+            if (fromMatch.Success)
+                continue;
+
             var match = ModuleImportRegex.Match(trimmed);
 
             if (match.Success)
@@ -483,6 +535,18 @@ public class Transpiler
             );
         }
 
+        // Rewrite selected symbols from `from x import y` into explicit
+        // module-member references. We target call expressions so local
+        // variable names and declarations are not accidentally rewritten.
+        foreach (var binding in fromImportBindings)
+        {
+            processedCode = Regex.Replace(
+                processedCode,
+                $@"(?<![A-Za-z0-9_\.]){Regex.Escape(binding.LocalName)}(?=\s*\()",
+                binding.QualifiedName
+            );
+        }
+
         return (processedCode, moduleBodies);
     }
 
@@ -514,6 +578,41 @@ public class Transpiler
             result.Add(new ImportSpec
             {
                 Path = item,
+                Alias = null
+            });
+        }
+
+        return result;
+    }
+
+    private static List<FromImportSpec> ParseFromImportNames(string value)
+    {
+        var result = new List<FromImportSpec>();
+
+        foreach (var rawItem in SplitTopLevelImportList(value))
+        {
+            var item = rawItem.Trim();
+            if (item.Length == 0)
+                continue;
+
+            var aliasMatch = Regex.Match(
+                item,
+                @"^(?<name>[A-Za-z_][A-Za-z0-9_]*)\s+as\s+(?<alias>[A-Za-z_][A-Za-z0-9_]*)$"
+            );
+
+            if (aliasMatch.Success)
+            {
+                result.Add(new FromImportSpec
+                {
+                    Name = aliasMatch.Groups["name"].Value,
+                    Alias = aliasMatch.Groups["alias"].Value
+                });
+                continue;
+            }
+
+            result.Add(new FromImportSpec
+            {
+                Name = item,
                 Alias = null
             });
         }
@@ -793,6 +892,12 @@ public class Transpiler
     private static readonly Regex ModuleImportRegex =
         new(
             @"^import\s+((?:(""(?:\./|\.\./|\.\\|\.\.\\)[^""]+""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?)(?:\s*,\s*(""(?:\./|\.\./|\.\\|\.\.\\)[^""]+""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?)*)$",
+            RegexOptions.Multiline
+        );
+
+    private static readonly Regex FromImportRegex =
+        new(
+            @"^from\s+(?<path>""(?:\./|\.\./|\.\\|\.\.\\)[^"" ]+""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s+import\s+(?<names>.+)$",
             RegexOptions.Multiline
         );
 
