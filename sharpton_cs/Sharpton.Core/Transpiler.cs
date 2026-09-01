@@ -273,6 +273,12 @@ public class Transpiler
         importPath.Add(rootPath);
     }
 
+    private sealed class ImportSpec
+    {
+        public required string Path { get; init; }
+        public string? Alias { get; init; }
+    }
+
     private (string processedCode, List<string> moduleBodies)
         ProcessImports(
             string spCode,
@@ -280,8 +286,10 @@ public class Transpiler
             string sourceFile)
     {
         var moduleBodies = new List<string>();
-        var moduleMap = new Dictionary<string, string>();
-        var moduleReferenceMap = new Dictionary<string, string>();
+        var moduleMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var moduleReferenceMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var moduleUsingMap = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var generatedClassByModulePath = new Dictionary<string, string>(StringComparer.Ordinal);
 
         // Imports are resolved relative to the file that contains the import.
         // This is important for nested modules: moduleA/index.spy should resolve
@@ -291,16 +299,15 @@ public class Transpiler
 
         foreach (Match match in ModuleImportRegex.Matches(spCode))
         {
-            // Separate module list with commas
-            var moduleList = match.Groups[1].Value;
-            var moduleNames = moduleList.Split(',')
-                .Select(m => m.Trim())
-                .Where(m => !string.IsNullOrEmpty(m));
+            var importList = ParseImportList(match.Groups[1].Value);
 
-            foreach (var moduleName in moduleNames)
+            foreach (var import in importList)
             {
+                var moduleName = import.Path;
                 var isRelative = IsRelativeImport(moduleName);
-                var moduleReferenceName = GetModuleReferenceName(moduleName);
+                var moduleReferenceName =
+                    import.Alias ?? GetModuleReferenceName(moduleName);
+
                 var modulePath = ResolveModulePath(
                     importingDirectory,
                     moduleName,
@@ -329,16 +336,45 @@ public class Transpiler
                     );
                 }
 
-                // Relative paths are referenced in SharpThon by their file/directory
-                // name, e.g. import "../utils/math" -> math.add(...).
-                var className = ToPascalCase(moduleReferenceName);
-                moduleMap[moduleName] = className;
+                // Use the alias as the public SharpThon reference when one exists.
+                // Without an alias, preserve the existing behavior:
+                //   import ./utils/math -> math.add(...)
+                string uniqueClassName;
+
+                // The same physical module may be imported more than once with
+                // different aliases. Emit the module only once and make all
+                // aliases point to that generated class.
+                if (generatedClassByModulePath.TryGetValue(modulePath, out var existingClassName))
+                {
+                    uniqueClassName = existingClassName;
+                }
+                else
+                {
+                    uniqueClassName = ToPascalCase(moduleReferenceName);
+
+                    // Avoid generated class collisions when two different modules
+                    // use the same alias or basename.
+                    var collisionIndex = 2;
+                    var candidate = uniqueClassName;
+                    while (generatedClassByModulePath.Values.Contains(candidate, StringComparer.Ordinal))
+                    {
+                        candidate = ToPascalCase(
+                            $"{moduleReferenceName}_{collisionIndex++}"
+                        );
+                    }
+
+                    uniqueClassName = candidate;
+                    generatedClassByModulePath[modulePath] = uniqueClassName;
+                }
+
+                moduleMap[moduleName] = uniqueClassName;
                 moduleReferenceMap[moduleName] = moduleReferenceName;
+                moduleUsingMap[moduleName] = import.Alias == null;
 
                 var lineNumber =
                     spCode[..match.Index].Count(c => c == '\n') + 1;
 
-                // check circular import
+                // Check circular import.
                 if (modulesInProgress.Contains(modulePath))
                 {
                     var cycleStart = importPath.IndexOf(modulePath);
@@ -364,7 +400,7 @@ public class Transpiler
 
                 try
                 {
-                    var body = TranspileModule(modulePath, className);
+                    var body = TranspileModule(modulePath, uniqueClassName);
                     if (!string.IsNullOrWhiteSpace(body))
                         moduleBodies.Add(body);
                 }
@@ -376,7 +412,9 @@ public class Transpiler
             }
         }
 
-        // Convert import lines to using static.
+        // Convert import lines to using static when no alias was supplied.
+        // Aliased imports intentionally do not generate using-static directives;
+        // references such as `math.add(...)` are rewritten to the generated class.
         var lines = spCode.Split('\n');
         var newLines = new List<string>();
 
@@ -387,16 +425,13 @@ public class Transpiler
 
             if (match.Success)
             {
-                var moduleList = match.Groups[1].Value;
-                var moduleNames = moduleList.Split(',')
-                    .Select(m => m.Trim())
-                    .Where(m => !string.IsNullOrEmpty(m));
-
+                var importList = ParseImportList(match.Groups[1].Value);
                 bool allFound = true;
                 var classNames = new List<string>();
-                foreach (var moduleName in moduleNames)
+
+                foreach (var import in importList)
                 {
-                    if (moduleMap.TryGetValue(moduleName, out var className))
+                    if (moduleMap.TryGetValue(import.Path, out var className))
                         classNames.Add(className);
                     else
                     {
@@ -407,9 +442,23 @@ public class Transpiler
 
                 if (allFound && allowUsingStatements)
                 {
-                    foreach (var className in classNames)
-                        newLines.Add($"using static {className};");
-                    continue;
+                    bool wroteUsing = false;
+
+                    for (int i = 0; i < importList.Count; i++)
+                    {
+                        var import = importList[i];
+
+                        if (moduleUsingMap.TryGetValue(import.Path, out var useUsing) &&
+                            useUsing)
+                        {
+                            newLines.Add($"using static {classNames[i]};");
+                            wroteUsing = true;
+                        }
+                    }
+
+                    // Every import was consumed, including aliased imports.
+                    if (importList.Count > 0)
+                        continue;
                 }
             }
 
@@ -418,9 +467,12 @@ public class Transpiler
 
         var processedCode = string.Join("\n", newLines);
 
-        // Replace module references by generated class names. For a relative
-        // import, the source reference is the basename (math), not the path
-        // (../utils/math), because the latter is not a valid identifier.
+        // Replace module references by generated class names.
+        // For aliases this becomes:
+        //   import "./utils/math" as math
+        //   math.add(...)
+        // =>
+        //   Math.add(...)
         foreach (var (moduleName, className) in moduleMap)
         {
             var referenceName = moduleReferenceMap[moduleName];
@@ -432,6 +484,64 @@ public class Transpiler
         }
 
         return (processedCode, moduleBodies);
+    }
+
+    private static List<ImportSpec> ParseImportList(string importList)
+    {
+        var result = new List<ImportSpec>();
+
+        foreach (var rawItem in SplitTopLevelImportList(importList))
+        {
+            var item = rawItem.Trim();
+            if (item.Length == 0)
+                continue;
+
+            var aliasMatch = Regex.Match(
+                item,
+                @"^(?<path>""(?:[^""]+)""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s+as\s+(?<alias>[A-Za-z_][A-Za-z0-9_]*)$"
+            );
+
+            if (aliasMatch.Success)
+            {
+                result.Add(new ImportSpec
+                {
+                    Path = aliasMatch.Groups["path"].Value,
+                    Alias = aliasMatch.Groups["alias"].Value
+                });
+                continue;
+            }
+
+            result.Add(new ImportSpec
+            {
+                Path = item,
+                Alias = null
+            });
+        }
+
+        return result;
+    }
+
+    private static IEnumerable<string> SplitTopLevelImportList(string value)
+    {
+        var items = new List<string>();
+        var start = 0;
+        bool inQuotes = false;
+
+        for (int i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+
+            if (ch == '"')
+                inQuotes = !inQuotes;
+            else if (ch == ',' && !inQuotes)
+            {
+                items.Add(value.Substring(start, i - start));
+                start = i + 1;
+            }
+        }
+
+        items.Add(value[start..]);
+        return items;
     }
 
     private static bool IsRelativeImport(string moduleName)
@@ -543,7 +653,7 @@ public class Transpiler
         bool inMemberBlock = false;
         int memberStartDepth = 0;
         var memberKinds = new Regex(
-            @"^(?:(?:public|private|protected|static|abstract|sealed|partial)\s+)*(?:class|interface)\b|^(?:(?:public|private|protected|static)\s+)*def\s+",
+            @"^(?:(?:public|private|protected|static|abstract|sealed|partial|async)\s+)*(?:class|interface)\b|^(?:(?:public|private|protected|static|async)\s+)*def\s+|^(?:(?:public|private|protected|static|async)\s+)+[A-Za-z_][A-Za-z0-9_<>,\[\]\? ]*\s+[A-Za-z_][A-Za-z0-9_]*\s*\(",
             RegexOptions.Compiled
         );
 
@@ -584,7 +694,7 @@ public class Transpiler
         int memberStartDepth = 0;
 
         var memberKinds = new Regex(
-            @"^(?:(?:public|private|protected|static|abstract|sealed|partial)\s+)*(?:class|interface)\b|^(?:(?:public|private|protected|static)\s+)*def\s+",
+            @"^(?:(?:public|private|protected|static|abstract|sealed|partial|async)\s+)*(?:class|interface)\b|^(?:(?:public|private|protected|static|async)\s+)*def\s+|^(?:(?:public|private|protected|static|async)\s+)+[A-Za-z_][A-Za-z0-9_<>,\[\]\? ]*\s+[A-Za-z_][A-Za-z0-9_]*\s*\(",
             RegexOptions.Compiled
         );
 
@@ -682,7 +792,7 @@ public class Transpiler
 
     private static readonly Regex ModuleImportRegex =
         new(
-            @"^import\s+((?:""(?:\./|\.\./|\.\\|\.\.\\)[^""]+""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)(?:\s*,\s*(?:""(?:\./|\.\./|\.\\|\.\.\\)[^""]+""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*))*)$",
+            @"^import\s+((?:(""(?:\./|\.\./|\.\\|\.\.\\)[^""]+""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?)(?:\s*,\s*(""(?:\./|\.\./|\.\\|\.\.\\)[^""]+""|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?)*)$",
             RegexOptions.Multiline
         );
 
