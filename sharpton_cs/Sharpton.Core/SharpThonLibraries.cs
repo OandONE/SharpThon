@@ -332,7 +332,7 @@ public static class SharpThonJson
     public static dynamic loads(string text)
     {
         using var document = System.Text.Json.JsonDocument.Parse(text);
-        return ConvertElement(document.RootElement);
+        return (dynamic)ConvertElement(document.RootElement)!;
     }
 
     public static dynamic load(string path) => loads(System.IO.File.ReadAllText(path));
