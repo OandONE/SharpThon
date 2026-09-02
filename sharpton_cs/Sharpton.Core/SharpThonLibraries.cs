@@ -61,7 +61,26 @@ public static class SharpThonOs
     public static string pardir => "..";
     public static string devnull => System.OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
     public static int getpid() => System.Environment.ProcessId;
-    public static int getppid() => System.Environment.ProcessId;
+
+    public static int getppid()
+    {
+        if (System.OperatingSystem.IsWindows())
+            return -1;
+
+        try
+        {
+            var stat = System.IO.File.ReadAllText("/proc/self/stat");
+            var closeParen = stat.LastIndexOf(')');
+            if (closeParen < 0) return -1;
+
+            var fields = stat[(closeParen + 1)..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            return fields.Length > 1 && int.TryParse(fields[1], out var ppid) ? ppid : -1;
+        }
+        catch
+        {
+            return -1;
+        }
+    }
     public static int cpu_count() => System.Environment.ProcessorCount;
 
     public static System.Collections.Generic.Dictionary<string, string> environ =>
@@ -108,7 +127,7 @@ public static class SharpThonOs
 
     public static string abspath(string path) => System.IO.Path.GetFullPath(path);
     public static string realpath(string path) => System.IO.Path.GetFullPath(path);
-    public static string normpath(string path) => System.IO.Path.GetFullPath(path);
+    public static string normpath(string path) => PathApi.NormalizePath(path);
     public static string normcase(string path) =>
         System.OperatingSystem.IsWindows() ? path.ToLowerInvariant() : path;
     public static string relpath(string path, string start = ".") => System.IO.Path.GetRelativePath(start, path);
@@ -131,9 +150,24 @@ public static class SharpThonOs
                 return System.Environment.GetEnvironmentVariable(key) ?? m.Value;
             });
 
-    public static string join(string a, string b) => System.IO.Path.Combine(a, b);
+    public static string join(params string[] parts) => JoinPaths(parts);
 
     public static readonly PathApi path = new();
+
+    private static string JoinPaths(string[] parts)
+    {
+        if (parts.Length == 0)
+            throw new System.ArgumentException("join() requires at least one path");
+
+        var result = parts[0];
+        for (var i = 1; i < parts.Length; i++)
+        {
+            result = System.IO.Path.IsPathRooted(parts[i])
+                ? parts[i]
+                : System.IO.Path.Combine(result, parts[i]);
+        }
+        return result;
+    }
 
     public static System.Collections.Generic.List<SharpThonOsWalkEntry> walk(string top)
     {
@@ -142,8 +176,14 @@ public static class SharpThonOs
         {
             result.Add(new SharpThonOsWalkEntry(
                 directory,
-                System.IO.Directory.GetDirectories(directory).Select(System.IO.Path.GetFileName).Where(x => x != null).Cast<string>().ToArray(),
-                System.IO.Directory.GetFiles(directory).Select(System.IO.Path.GetFileName).Where(x => x != null).Cast<string>().ToArray()));
+                System.IO.Directory.GetDirectories(directory)
+                    .Select(x => System.IO.Path.GetFileName(x) ?? "")
+                    .Where(x => x.Length > 0)
+                    .ToArray(),
+                System.IO.Directory.GetFiles(directory)
+                    .Select(x => System.IO.Path.GetFileName(x) ?? "")
+                    .Where(x => x.Length > 0)
+                    .ToArray()));
         }
         return result;
     }
@@ -158,28 +198,63 @@ public static class SharpThonOs
         public bool islink(string value) =>
             System.IO.File.Exists(value) &&
             (System.IO.File.GetAttributes(value) & System.IO.FileAttributes.ReparsePoint) != 0;
-        public string join(string a, string b) => System.IO.Path.Combine(a, b);
+        public string join(params string[] parts) => SharpThonOs.JoinPaths(parts);
         public string dirname(string value) => System.IO.Path.GetDirectoryName(value) ?? "";
         public string basename(string value) => System.IO.Path.GetFileName(value) ?? "";
         public string abspath(string value) => System.IO.Path.GetFullPath(value);
         public string realpath(string value) => System.IO.Path.GetFullPath(value);
-        public string normpath(string value)
-        {
-            if (string.IsNullOrEmpty(value)) return ".";
-            var full = System.IO.Path.GetFullPath(value);
-            if (System.IO.Path.IsPathRooted(value)) return full;
-            return System.IO.Path.GetRelativePath(System.Environment.CurrentDirectory, full);
-        }
+        public string normpath(string value) => NormalizePath(value);
         public string normcase(string value) => System.OperatingSystem.IsWindows() ? value.ToLowerInvariant() : value;
         public string relpath(string value, string start = ".") => System.IO.Path.GetRelativePath(start, value);
         public string[] split(string value)
         {
             return new[] { dirname(value), basename(value) };
         }
-        public string splitext(string value)
+        public string[] splitext(string value)
         {
             var extension = System.IO.Path.GetExtension(value);
-            return value[..(value.Length - extension.Length)] + "|" + extension;
+            return new[] { value[..(value.Length - extension.Length)], extension };
+        }
+
+        public static string NormalizePath(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return ".";
+
+            var input = value.Replace('\\', '/');
+            var drive = input.Length >= 2 && input[1] == ':';
+            var rooted = input.StartsWith("/", StringComparison.Ordinal) || drive;
+            var prefix = drive ? input[..2] : (rooted ? "/" : "");
+            var remainder = drive ? input[2..] : input;
+            var stack = new List<string>();
+
+            foreach (var part in remainder.Split('/', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (part == ".") continue;
+                if (part == "..")
+                {
+                    if (stack.Count > 0 && stack[^1] != "..")
+                        stack.RemoveAt(stack.Count - 1);
+                    else if (!rooted)
+                        stack.Add("..");
+                    continue;
+                }
+                stack.Add(part);
+            }
+
+            var separator = System.IO.Path.DirectorySeparatorChar;
+            var result = prefix + string.Join(separator, stack);
+
+            if (drive)
+            {
+                if (stack.Count == 0) return prefix + separator;
+                result = prefix + separator + string.Join(separator, stack);
+                return result;
+            }
+
+            if (result.Length == 0)
+                return rooted ? separator.ToString() : ".";
+
+            return result;
         }
     }
 }
@@ -220,7 +295,7 @@ public static class SharpThonJson
     public static dynamic loads(string text)
     {
         using var document = System.Text.Json.JsonDocument.Parse(text);
-        return ConvertElement(document.RootElement);
+        return (dynamic)ConvertElement(document.RootElement)!;
     }
 
     public static dynamic load(string path) => loads(System.IO.File.ReadAllText(path));
@@ -265,7 +340,7 @@ public static class SharpThonJson
         return value;
     }
 
-    private static dynamic ConvertElement(System.Text.Json.JsonElement element)
+    private static object? ConvertElement(System.Text.Json.JsonElement element)
     {
         switch (element.ValueKind)
         {
@@ -305,20 +380,21 @@ public static class SharpThonJson
     private const string ReBody = """
 public static class SharpThonRe
 {
-    public const int A = (int)System.Text.RegularExpressions.RegexOptions.IgnoreCase;
+    // Python re.ASCII: .NET ECMAScript gives ASCII-oriented character classes.
+    public const int A = (int)System.Text.RegularExpressions.RegexOptions.ECMAScript;
     public const int I = (int)System.Text.RegularExpressions.RegexOptions.IgnoreCase;
     public const int M = (int)System.Text.RegularExpressions.RegexOptions.Multiline;
     public const int S = (int)System.Text.RegularExpressions.RegexOptions.Singleline;
     public const int X = (int)System.Text.RegularExpressions.RegexOptions.IgnorePatternWhitespace;
 
     public static SharpThonRegexMatch? match(string pattern, string text, int flags = 0) =>
-        Wrap(new System.Text.RegularExpressions.Regex(pattern, Options(flags)).Match(text));
+        Wrap(new System.Text.RegularExpressions.Regex("\\A(?:" + pattern + ")", Options(flags)).Match(text));
 
     public static SharpThonRegexMatch? search(string pattern, string text, int flags = 0) =>
         Wrap(new System.Text.RegularExpressions.Regex(pattern, Options(flags)).Match(text));
 
     public static SharpThonRegexMatch? fullmatch(string pattern, string text, int flags = 0) =>
-        Wrap(new System.Text.RegularExpressions.Regex("^(?:" + pattern + ")$", Options(flags)).Match(text));
+        Wrap(new System.Text.RegularExpressions.Regex("\\A(?:" + pattern + ")\\z", Options(flags)).Match(text));
 
     public static SharpThonCompiledRegex compile(string pattern, int flags = 0) =>
         new(pattern, flags);
@@ -367,21 +443,26 @@ public static class SharpThonRe
 public sealed class SharpThonCompiledRegex
 {
     private readonly System.Text.RegularExpressions.Regex regex;
+    private readonly System.Text.RegularExpressions.Regex matchRegex;
 
     public SharpThonCompiledRegex(string pattern, int flags = 0)
     {
-        regex = new System.Text.RegularExpressions.Regex(
-            pattern,
-            (System.Text.RegularExpressions.RegexOptions)flags);
+        var options = (System.Text.RegularExpressions.RegexOptions)flags;
+        regex = new System.Text.RegularExpressions.Regex(pattern, options);
+        matchRegex = new System.Text.RegularExpressions.Regex("\\A(?:" + pattern + ")", options);
     }
 
     public SharpThonRegexMatch? match(string text)
     {
-        var result = regex.Match(text);
+        var result = matchRegex.Match(text);
         return result.Success ? new SharpThonRegexMatch(result) : null;
     }
 
-    public SharpThonRegexMatch? search(string text) => match(text);
+    public SharpThonRegexMatch? search(string text)
+    {
+        var result = regex.Match(text);
+        return result.Success ? new SharpThonRegexMatch(result) : null;
+    }
 
     public System.Collections.Generic.List<string> findall(string text) =>
         regex.Matches(text)
@@ -540,7 +621,12 @@ public static class SharpThonRandom
     public static double triangular(double low = 0.0, double high = 1.0, double mode = double.NaN)
     {
         if (high < low) (low, high) = (high, low);
+        if (high == low) return low;
+
         var m = double.IsNaN(mode) ? (low + high) / 2.0 : mode;
+        if (m < low || m > high)
+            throw new System.ArgumentOutOfRangeException(nameof(mode), "mode must be between low and high");
+
         var c = (m - low) / (high - low);
         var u = _random.NextDouble();
         return u <= c
@@ -633,7 +719,16 @@ public static class SharpThonMath
     public static bool isfinite(double value) => double.IsFinite(value);
     public static bool isinf(double value) => double.IsInfinity(value);
     public static bool isnan(double value) => double.IsNaN(value);
-    public static long isqrt(long value) => value < 0 ? throw new System.ArgumentOutOfRangeException(nameof(value)) : (long)System.Math.Floor(System.Math.Sqrt(value));
+    public static long isqrt(long value)
+    {
+        if (value < 0) throw new System.ArgumentOutOfRangeException(nameof(value));
+        if (value < 2) return value;
+
+        var root = (long)System.Math.Sqrt(value);
+        while (root > value / root) root--;
+        while (root < long.MaxValue && (root + 1) <= value / (root + 1)) root++;
+        return root;
+    }
     public static double ldexp(double value, int exponent) => value * System.Math.Pow(2.0, exponent);
     public static double log(double value, double new_base = 0.0) => new_base == 0.0 ? System.Math.Log(value) : System.Math.Log(value, new_base);
     public static double log10(double value) => System.Math.Log10(value);
@@ -651,9 +746,12 @@ public static class SharpThonMath
 
     public static double[] frexp(double value)
     {
-        if (value == 0.0) return new[] { 0.0, 0.0 };
-        var exponent = (int)System.Math.Floor(System.Math.Log(System.Math.Abs(value), 2.0)) + 1;
-        return new[] { value / System.Math.Pow(2.0, exponent), (double)exponent };
+        if (value == 0.0 || double.IsNaN(value) || double.IsInfinity(value))
+            return new[] { value, 0.0 };
+
+        var exponent = System.Math.ILogB(System.Math.Abs(value)) + 1;
+        var mantissa = System.Math.ScaleB(value, -exponent);
+        return new[] { mantissa, (double)exponent };
     }
 
     public static double[] modf(double value) =>
@@ -735,19 +833,30 @@ public static class SharpThonTime
     public static double time() =>
         (System.DateTimeOffset.UtcNow - System.DateTimeOffset.UnixEpoch).TotalSeconds;
 
-    public static long time_ns() =>
-        (System.DateTimeOffset.UtcNow - System.DateTimeOffset.UnixEpoch).Ticks * 100L;
+    public static long time_ns()
+    {
+        var ticks = System.DateTime.UtcNow.Ticks - System.DateTime.UnixEpoch.Ticks;
+        var seconds = ticks / System.TimeSpan.TicksPerSecond;
+        var remainder = ticks % System.TimeSpan.TicksPerSecond;
+        return checked(seconds * 1_000_000_000L + (remainder * 100L));
+    }
 
     public static double monotonic() =>
         System.Diagnostics.Stopwatch.GetTimestamp() / (double)System.Diagnostics.Stopwatch.Frequency;
 
-    public static long monotonic_ns() =>
-        System.Diagnostics.Stopwatch.GetTimestamp() * 1_000_000_000L / System.Diagnostics.Stopwatch.Frequency;
+    public static long monotonic_ns()
+    {
+        var ticks = System.Diagnostics.Stopwatch.GetTimestamp();
+        var frequency = System.Diagnostics.Stopwatch.Frequency;
+        var seconds = ticks / frequency;
+        var remainder = ticks % frequency;
+        return checked(seconds * 1_000_000_000L + (remainder * 1_000_000_000L) / frequency);
+    }
 
     public static double perf_counter() => monotonic();
     public static long perf_counter_ns() => monotonic_ns();
     public static double process_time() => System.Diagnostics.Process.GetCurrentProcess().TotalProcessorTime.TotalSeconds;
-    public static long process_time_ns() => (long)(process_time() * 1_000_000_000L);
+    public static long process_time_ns() => System.Diagnostics.Process.GetCurrentProcess().TotalProcessorTime.Ticks * 100L;
 
     public static string ctime(double seconds = -1)
     {
@@ -778,8 +887,11 @@ public static class SharpThonTime
         System.Threading.Thread.Sleep(System.TimeSpan.FromMilliseconds(milliseconds));
     }
 
-    public static double mktime(int year, int month, int day, int hour = 0, int minute = 0, int second = 0) =>
-        (new System.DateTimeOffset(year, month, day, hour, minute, second, System.TimeSpan.Zero) - System.DateTimeOffset.UnixEpoch).TotalSeconds;
+    public static double mktime(int year, int month, int day, int hour = 0, int minute = 0, int second = 0)
+    {
+        var local = new System.DateTime(year, month, day, hour, minute, second, System.DateTimeKind.Local);
+        return new System.DateTimeOffset(local).ToUnixTimeSeconds();
+    }
 }
 
 public sealed class SharpThonTimeStruct
