@@ -126,7 +126,7 @@ public static class SharpThonOs
     public static SharpThonOsStat stat(string path) => new(path);
 
     public static string abspath(string path) => System.IO.Path.GetFullPath(path);
-    public static string realpath(string path) => System.IO.Path.GetFullPath(path);
+    public static string realpath(string path) => PathApi.RealPath(path);
     public static string normpath(string path) => PathApi.NormalizePath(path);
     public static string normcase(string path) =>
         System.OperatingSystem.IsWindows() ? path.ToLowerInvariant() : path;
@@ -202,7 +202,7 @@ public static class SharpThonOs
         public string dirname(string value) => System.IO.Path.GetDirectoryName(value) ?? "";
         public string basename(string value) => System.IO.Path.GetFileName(value) ?? "";
         public string abspath(string value) => System.IO.Path.GetFullPath(value);
-        public string realpath(string value) => System.IO.Path.GetFullPath(value);
+        public string realpath(string value) => RealPath(value);
         public string normpath(string value) => NormalizePath(value);
         public string normcase(string value) => System.OperatingSystem.IsWindows() ? value.ToLowerInvariant() : value;
         public string relpath(string value, string start = ".") => System.IO.Path.GetRelativePath(start, value);
@@ -215,6 +215,43 @@ public static class SharpThonOs
             var extension = System.IO.Path.GetExtension(value);
             return new[] { value[..(value.Length - extension.Length)], extension };
         }
+
+        public static string RealPath(string value)
+        {
+            var full = System.IO.Path.GetFullPath(value);
+
+            if (!System.OperatingSystem.IsWindows())
+            {
+                try
+                {
+                    var ptr = realpath_native(full, System.IntPtr.Zero);
+                    if (ptr != System.IntPtr.Zero)
+                    {
+                        var resolved = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(ptr);
+                        free_native(ptr);
+                        if (!string.IsNullOrEmpty(resolved))
+                            return resolved;
+                    }
+                }
+                catch { }
+            }
+
+            try
+            {
+                if (System.IO.File.Exists(full))
+                    return new System.IO.FileInfo(full).ResolveLinkTarget(true)?.FullName ?? full;
+                if (System.IO.Directory.Exists(full))
+                    return new System.IO.DirectoryInfo(full).ResolveLinkTarget(true)?.FullName ?? full;
+            }
+            catch { }
+            return full;
+        }
+
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "realpath", CharSet = System.Runtime.InteropServices.CharSet.Ansi)]
+        private static extern System.IntPtr realpath_native(string path, System.IntPtr resolvedPath);
+
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "free")]
+        private static extern void free_native(System.IntPtr ptr);
 
         public static string NormalizePath(string value)
         {
@@ -295,49 +332,103 @@ public static class SharpThonJson
     public static dynamic loads(string text)
     {
         using var document = System.Text.Json.JsonDocument.Parse(text);
-        return (dynamic)ConvertElement(document.RootElement)!;
+        return ConvertElement(document.RootElement);
     }
 
     public static dynamic load(string path) => loads(System.IO.File.ReadAllText(path));
 
-    public static string dumps(dynamic value, int indent = -1)
-    {
-        var options = new System.Text.Json.JsonSerializerOptions
-        {
-            WriteIndented = indent >= 0
-        };
-        return System.Text.Json.JsonSerializer.Serialize(Normalize(value), options);
-    }
+    // Python json.dumps defaults to separators=(', ', ': ') and ensure_ascii=True.
+    public static string dumps(dynamic value, int indent = -1) => SerializePythonJson(value, indent, 0);
 
     public static void dump(dynamic value, string path, int indent = -1) =>
         System.IO.File.WriteAllText(path, dumps(value, indent));
 
-    private static object? Normalize(object? value)
+    private static string SerializePythonJson(object? value, int indent, int depth)
     {
-        if (value is null ||
-            value is string ||
-            value is bool ||
-            value is byte || value is short || value is int || value is long ||
-            value is float || value is double || value is decimal)
-            return value;
+        if (value is null) return "null";
+        if (value is string text) return Quote(text);
+        if (value is bool b) return b ? "true" : "false";
+
+        if (value is byte || value is short || value is int || value is long ||
+            value is System.Numerics.BigInteger)
+            return value.ToString() ?? "0";
+
+        if (value is float f)
+            return FormatFloat(f);
+        if (value is double d)
+            return FormatFloat(d);
+        if (value is decimal dec)
+            return dec.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         if (value is System.Collections.IDictionary dictionary)
         {
-            var result = new System.Collections.Generic.Dictionary<string, object?>();
+            var entries = new List<string>();
             foreach (System.Collections.DictionaryEntry entry in dictionary)
-                result[entry.Key?.ToString() ?? "null"] = Normalize(entry.Value);
-            return result;
+            {
+                var key = entry.Key?.ToString() ?? "null";
+                entries.Add(Quote(key) + ": " + SerializePythonJson(entry.Value, indent, depth + 1));
+            }
+            return FormatContainer("{", "}", entries, indent, depth);
         }
 
         if (value is System.Collections.IEnumerable enumerable)
         {
-            var result = new System.Collections.Generic.List<object?>();
+            var items = new List<string>();
             foreach (var item in enumerable)
-                result.Add(Normalize(item));
-            return result;
+                items.Add(SerializePythonJson(item, indent, depth + 1));
+            return FormatContainer("[", "]", items, indent, depth);
         }
 
-        return value;
+        return Quote(value.ToString() ?? "");
+    }
+
+    private static string FormatContainer(string open, string close, List<string> items, int indent, int depth)
+    {
+        if (items.Count == 0) return open + close;
+        if (indent < 0) return open + string.Join(", ", items) + close;
+
+        var pad = new string(' ', (depth + 1) * indent);
+        var closePad = new string(' ', depth * indent);
+        return open + "\n" + pad + string.Join(",\n" + pad, items) + "\n" + closePad + close;
+    }
+
+    private static string FormatFloat(double value)
+    {
+        if (double.IsNaN(value)) return "NaN";
+        if (double.IsPositiveInfinity(value)) return "Infinity";
+        if (double.IsNegativeInfinity(value)) return "-Infinity";
+
+        var text = value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        if (!text.Contains('.') && !text.Contains('E') && !text.Contains('e'))
+            text += ".0";
+        return text;
+    }
+
+    private static string Quote(string text)
+    {
+        var builder = new System.Text.StringBuilder(text.Length + 2);
+        builder.Append('"');
+        foreach (var ch in text)
+        {
+            switch (ch)
+            {
+                case '"': builder.Append("\\\""); break;
+                case '\\': builder.Append("\\\\"); break;
+                case '\b': builder.Append("\\b"); break;
+                case '\f': builder.Append("\\f"); break;
+                case '\n': builder.Append("\\n"); break;
+                case '\r': builder.Append("\\r"); break;
+                case '\t': builder.Append("\\t"); break;
+                default:
+                    if (ch < 0x20 || ch > 0x7f)
+                        builder.Append("\\u").Append(((int)ch).ToString("x4", System.Globalization.CultureInfo.InvariantCulture));
+                    else
+                        builder.Append(ch);
+                    break;
+            }
+        }
+        builder.Append('"');
+        return builder.ToString();
     }
 
     private static object? ConvertElement(System.Text.Json.JsonElement element)
@@ -544,37 +635,62 @@ public static class SharpThonSys
     private const string RandomBody = """
 public static class SharpThonRandom
 {
-    private static System.Random _random = new();
+    // CPython's random module uses MT19937. Keeping the same core generator,
+    // seeding and _randbelow algorithm makes deterministic integer seeds match Python.
+    private const int N = 624;
+    private const int M = 397;
+    private const uint MATRIX_A = 0x9908B0DFU;
+    private const uint UPPER_MASK = 0x80000000U;
+    private const uint LOWER_MASK = 0x7FFFFFFFU;
 
-    public static void seed() => _random = new System.Random();
-    public static void seed(int seedValue) => _random = new System.Random(seedValue);
-    public static double random() => _random.NextDouble();
-    public static double uniform(double a, double b) => a + ((b - a) * _random.NextDouble());
+    private static readonly uint[] _state = new uint[N];
+    private static int _index = N;
+    private static double? _gaussNext;
+
+    public static void seed() => SeedFromEntropy();
+    public static void seed(int seedValue) => SeedInteger(new System.Numerics.BigInteger(seedValue));
+    public static void seed(long seedValue) => SeedInteger(new System.Numerics.BigInteger(seedValue));
+    public static void seed(string seedValue) => SeedPythonBytes(System.Text.Encoding.UTF8.GetBytes(seedValue));
+    public static void seed(byte[] seedValue) => SeedPythonBytes(seedValue);
+
+    public static double random()
+    {
+        var a = GenRandUInt32() >> 5;
+        var b = GenRandUInt32() >> 6;
+        return (a * 67108864.0 + b) * (1.0 / 9007199254740992.0);
+    }
+
+    public static double uniform(double a, double b) => a + (b - a) * random();
 
     public static int randint(int a, int b)
     {
-        if (a > b) throw new System.ArgumentException("empty range for randint()");
-        return checked((int)_random.NextInt64(a, (long)b + 1));
+        if (b < a) throw new System.ArgumentException($"empty range in randint({a}, {b})");
+        return checked(a + (int)RandBelow((long)b - a + 1));
     }
 
-    public static int randrange(int stop) => randrange(0, stop, 1);
+    public static int randrange(int stop)
+    {
+        if (stop <= 0) throw new System.ArgumentException($"empty range for randrange({stop})");
+        return checked((int)RandBelow(stop));
+    }
+
     public static int randrange(int start, int stop) => randrange(start, stop, 1);
 
     public static int randrange(int start, int stop, int step)
     {
         if (step == 0) throw new System.ArgumentException("zero step for randrange()");
-        long count = step > 0
-            ? (stop <= start ? 0 : ((long)stop - start + step - 1) / step)
-            : (stop >= start ? 0 : ((long)start - stop + (-step) - 1) / (-step));
-        if (count <= 0) throw new System.ArgumentException("empty range for randrange()");
-        var index = _random.NextInt64(count);
-        return checked((int)(start + (index * step)));
+        long width = (long)stop - start;
+        long n = step > 0
+            ? (width > 0 ? (width + step - 1) / step : 0)
+            : (width < 0 ? (width + step + 1) / step : 0);
+        if (n <= 0) throw new System.ArgumentException($"empty range in randrange({start}, {stop}, {step})");
+        return checked(start + (int)(step * RandBelow(n)));
     }
 
     public static T choice<T>(System.Collections.Generic.IList<T> sequence)
     {
         if (sequence.Count == 0) throw new System.IndexOutOfRangeException("Cannot choose from an empty sequence");
-        return sequence[_random.Next(sequence.Count)];
+        return sequence[(int)RandBelow(sequence.Count)];
     }
 
     public static System.Collections.Generic.List<T> choices<T>(System.Collections.Generic.IList<T> population, int k = 1)
@@ -582,68 +698,228 @@ public static class SharpThonRandom
         if (population.Count == 0) throw new System.IndexOutOfRangeException("Cannot choose from an empty sequence");
         if (k < 0) throw new System.ArgumentOutOfRangeException(nameof(k));
         var result = new System.Collections.Generic.List<T>(k);
-        for (var i = 0; i < k; i++) result.Add(choice(population));
+        var n = population.Count;
+        for (var i = 0; i < k; i++)
+            result.Add(population[(int)System.Math.Floor(random() * n)]);
         return result;
     }
 
     public static System.Collections.Generic.List<T> sample<T>(System.Collections.Generic.IList<T> population, int k)
     {
-        if (k < 0 || k > population.Count) throw new System.ArgumentException("Sample larger than population");
-        var copy = population.ToList();
-        shuffle(copy);
-        return copy.Take(k).ToList();
+        var n = population.Count;
+        if (k < 0 || k > n) throw new System.ArgumentException("Sample larger than population or is negative");
+
+        var result = new System.Collections.Generic.List<T>(k);
+        if (n <= 21 || k <= 5)
+        {
+            var pool = population.ToList();
+            for (var i = 0; i < k; i++)
+            {
+                var j = (int)RandBelow(n - i);
+                result.Add(pool[j]);
+                pool[j] = pool[n - i - 1];
+            }
+            return result;
+        }
+
+        var selected = new System.Collections.Generic.HashSet<int>();
+        for (var i = 0; i < k; i++)
+        {
+            var j = (int)RandBelow(n);
+            while (!selected.Add(j)) j = (int)RandBelow(n);
+            result.Add(population[j]);
+        }
+        return result;
     }
 
     public static void shuffle<T>(System.Collections.Generic.IList<T> sequence)
     {
         for (var i = sequence.Count - 1; i > 0; i--)
         {
-            var j = _random.Next(i + 1);
+            var j = (int)RandBelow(i + 1);
             (sequence[i], sequence[j]) = (sequence[j], sequence[i]);
         }
     }
 
-    public static int getrandbits(int k)
+    public static System.Numerics.BigInteger getrandbits(int k)
     {
-        if (k < 0 || k > 30) throw new System.ArgumentOutOfRangeException(nameof(k));
-        if (k == 0) return 0;
-        return _random.Next(0, 1 << k);
+        if (k < 0) throw new System.ArgumentOutOfRangeException(nameof(k));
+        if (k == 0) return System.Numerics.BigInteger.Zero;
+
+        var words = (k + 31) / 32;
+        var result = System.Numerics.BigInteger.Zero;
+        for (var i = 0; i < words; i++)
+        {
+            var bits = System.Math.Min(32, k - i * 32);
+            var word = GenRandUInt32();
+            if (bits < 32) word >>= 32 - bits;
+            result |= new System.Numerics.BigInteger(word) << (i * 32);
+        }
+        return result;
     }
 
     public static byte[] randbytes(int n)
     {
         if (n < 0) throw new System.ArgumentOutOfRangeException(nameof(n));
+        var value = getrandbits(checked(n * 8));
         var result = new byte[n];
-        _random.NextBytes(result);
+        for (var i = 0; i < n; i++)
+            result[i] = (byte)((value >> (8 * i)) & 0xFF);
         return result;
     }
 
     public static double triangular(double low = 0.0, double high = 1.0, double mode = double.NaN)
     {
-        if (high < low) (low, high) = (high, low);
+        var u = random();
         if (high == low) return low;
-
-        var m = double.IsNaN(mode) ? (low + high) / 2.0 : mode;
-        if (m < low || m > high)
-            throw new System.ArgumentOutOfRangeException(nameof(mode), "mode must be between low and high");
-
-        var c = (m - low) / (high - low);
-        var u = _random.NextDouble();
-        return u <= c
-            ? low + System.Math.Sqrt(u * (high - low) * (m - low))
-            : high - System.Math.Sqrt((1 - u) * (high - low) * (high - m));
+        var c = double.IsNaN(mode) ? 0.5 : (mode - low) / (high - low);
+        if (u > c)
+        {
+            u = 1.0 - u;
+            c = 1.0 - c;
+            (low, high) = (high, low);
+        }
+        return low + (high - low) * System.Math.Sqrt(u * c);
     }
 
     public static double gauss(double mu = 0.0, double sigma = 1.0)
     {
-        var u1 = 1.0 - _random.NextDouble();
-        var u2 = 1.0 - _random.NextDouble();
-        return mu + sigma * System.Math.Sqrt(-2.0 * System.Math.Log(u1)) * System.Math.Cos(2.0 * System.Math.PI * u2);
+        if (_gaussNext.HasValue)
+        {
+            var cached = _gaussNext.Value;
+            _gaussNext = null;
+            return mu + cached * sigma;
+        }
+
+        var x2pi = random() * (2.0 * System.Math.PI);
+        var g2rad = System.Math.Sqrt(-2.0 * System.Math.Log(1.0 - random()));
+        var z = System.Math.Cos(x2pi) * g2rad;
+        _gaussNext = System.Math.Sin(x2pi) * g2rad;
+        return mu + z * sigma;
     }
 
-    public static double normalvariate(double mu = 0.0, double sigma = 1.0) => gauss(mu, sigma);
-    public static double lognormvariate(double mu, double sigma) => System.Math.Exp(normalvariate(mu, sigma));
-    public static double expovariate(double lambd = 1.0) => -System.Math.Log(1.0 - _random.NextDouble()) / lambd;
+    public static double normalvariate(double mu = 0.0, double sigma = 1.0)
+    {
+        var NV_MAGICCONST = 4.0 * System.Math.Exp(-0.5) / System.Math.Sqrt(2.0);
+        while (true)
+        {
+            var u1 = random();
+            var u2 = 1.0 - random();
+            var z = NV_MAGICCONST * (u1 - 0.5) / u2;
+            var zz = z * z / 4.0;
+            if (zz <= -System.Math.Log(u2))
+                return mu + z * sigma;
+        }
+    }
+
+    public static double lognormvariate(double mu = 0.0, double sigma = 1.0) => System.Math.Exp(normalvariate(mu, sigma));
+    public static double expovariate(double lambd = 1.0) => -System.Math.Log(1.0 - random()) / lambd;
+
+    private static void SeedPythonBytes(byte[] data)
+    {
+        var digest = System.Security.Cryptography.SHA512.HashData(data);
+        var combined = new byte[data.Length + digest.Length];
+        System.Buffer.BlockCopy(data, 0, combined, 0, data.Length);
+        System.Buffer.BlockCopy(digest, 0, combined, data.Length, digest.Length);
+        SeedInteger(new System.Numerics.BigInteger(combined, isUnsigned: true, isBigEndian: false));
+    }
+
+    private static void SeedInteger(System.Numerics.BigInteger value)
+    {
+        _gaussNext = null;
+        if (value < 0) value = System.Numerics.BigInteger.Negate(value);
+
+        var bytes = value.ToByteArray(isUnsigned: true, isBigEndian: false);
+        if (bytes.Length == 0) bytes = new byte[] { 0 };
+        var words = (bytes.Length + 3) / 4;
+        var key = new uint[words];
+        for (var i = 0; i < bytes.Length; i++)
+            key[i / 4] |= (uint)bytes[i] << ((i % 4) * 8);
+        InitByArray(key);
+    }
+
+    private static void SeedFromEntropy()
+    {
+        var bytes = new byte[N * 4];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
+        var key = new uint[N];
+        for (var i = 0; i < N; i++)
+            key[i] = BitConverter.ToUInt32(bytes, i * 4);
+        InitByArray(key);
+    }
+
+    private static void InitGenRand(uint seed)
+    {
+        _state[0] = seed;
+        for (var i = 1; i < N; i++)
+            _state[i] = unchecked(1812433253U * (_state[i - 1] ^ (_state[i - 1] >> 30)) + (uint)i);
+        _index = N;
+    }
+
+    private static void InitByArray(uint[] key)
+    {
+        InitGenRand(19650218U);
+        var i = 1;
+        var j = 0;
+        var k = System.Math.Max(N, key.Length);
+        for (var count = 0; count < k; count++)
+        {
+            _state[i] = unchecked((_state[i] ^ ((_state[i - 1] ^ (_state[i - 1] >> 30)) * 1664525U)) + key[j] + (uint)j);
+            i++;
+            j++;
+            if (i >= N) { _state[0] = _state[N - 1]; i = 1; }
+            if (j >= key.Length) j = 0;
+        }
+
+        for (k = N - 1; k > 0; k--)
+        {
+            _state[i] = unchecked((_state[i] ^ ((_state[i - 1] ^ (_state[i - 1] >> 30)) * 1566083941U)) - (uint)i);
+            i++;
+            if (i >= N) { _state[0] = _state[N - 1]; i = 1; }
+        }
+
+        _state[0] = 0x80000000U;
+        _index = N;
+        _gaussNext = null;
+    }
+
+    private static uint GenRandUInt32()
+    {
+        if (_index >= N)
+        {
+            for (var kk = 0; kk < N - M; kk++)
+            {
+                var y = (_state[kk] & UPPER_MASK) | (_state[kk + 1] & LOWER_MASK);
+                _state[kk] = _state[kk + M] ^ (y >> 1) ^ ((y & 1U) != 0 ? MATRIX_A : 0U);
+            }
+            for (var kk = N - M; kk < N - 1; kk++)
+            {
+                var y = (_state[kk] & UPPER_MASK) | (_state[kk + 1] & LOWER_MASK);
+                _state[kk] = _state[kk + (M - N)] ^ (y >> 1) ^ ((y & 1U) != 0 ? MATRIX_A : 0U);
+            }
+            var lastY = (_state[N - 1] & UPPER_MASK) | (_state[0] & LOWER_MASK);
+            _state[N - 1] = _state[M - 1] ^ (lastY >> 1) ^ ((lastY & 1U) != 0 ? MATRIX_A : 0U);
+            _index = 0;
+        }
+
+        var y2 = _state[_index++];
+        y2 ^= y2 >> 11;
+        y2 ^= (y2 << 7) & 0x9D2C5680U;
+        y2 ^= (y2 << 15) & 0xEFC60000U;
+        y2 ^= y2 >> 18;
+        return y2;
+    }
+
+    private static long RandBelow(long n)
+    {
+        if (n <= 0) throw new System.ArgumentException("Upper bound must be greater than zero");
+        var k = 64 - System.Numerics.BitOperations.LeadingZeroCount((ulong)(n - 1));
+        while (true)
+        {
+            var r = (long)getrandbits(k);
+            if (r < n) return r;
+        }
+    }
 }
 """;
 
@@ -713,9 +989,22 @@ public static class SharpThonMath
         return result;
     }
 
-    public static long gcd(long a, long b) => Gcd(a, b);
-    public static long lcm(long a, long b) => a == 0 || b == 0 ? 0 : System.Math.Abs((a / Gcd(a, b)) * b);
-    public static double hypot(double x, double y) => System.Math.Sqrt((x * x) + (y * y));
+    public static System.Numerics.BigInteger gcd(System.Numerics.BigInteger a, System.Numerics.BigInteger b) => Gcd(a, b);
+    public static System.Numerics.BigInteger lcm(System.Numerics.BigInteger a, System.Numerics.BigInteger b)
+    {
+        if (a.IsZero || b.IsZero) return System.Numerics.BigInteger.Zero;
+        return System.Numerics.BigInteger.Abs((a / Gcd(a, b)) * b);
+    }
+    public static double hypot(double x, double y)
+    {
+        x = System.Math.Abs(x);
+        y = System.Math.Abs(y);
+        if (double.IsInfinity(x) || double.IsInfinity(y)) return double.PositiveInfinity;
+        if (x < y) (x, y) = (y, x);
+        if (x == 0.0) return 0.0;
+        var r = y / x;
+        return x * System.Math.Sqrt(1.0 + r * r);
+    }
     public static bool isfinite(double value) => double.IsFinite(value);
     public static bool isinf(double value) => double.IsInfinity(value);
     public static bool isnan(double value) => double.IsNaN(value);
@@ -754,13 +1043,18 @@ public static class SharpThonMath
         return new[] { mantissa, (double)exponent };
     }
 
-    public static double[] modf(double value) =>
-        new[] { value - System.Math.Truncate(value), System.Math.Truncate(value) };
-
-    private static long Gcd(long a, long b)
+    public static double[] modf(double value)
     {
-        a = System.Math.Abs(a);
-        b = System.Math.Abs(b);
+        if (double.IsNaN(value)) return new[] { double.NaN, double.NaN };
+        if (double.IsInfinity(value)) return new[] { System.Math.CopySign(0.0, value), value };
+        var integer = System.Math.Truncate(value);
+        return new[] { value - integer, integer };
+    }
+
+    private static System.Numerics.BigInteger Gcd(System.Numerics.BigInteger a, System.Numerics.BigInteger b)
+    {
+        a = System.Numerics.BigInteger.Abs(a);
+        b = System.Numerics.BigInteger.Abs(b);
         while (b != 0) (a, b) = (b, a % b);
         return a;
     }
@@ -814,7 +1108,9 @@ public static class SharpThonTimeFormatting
                 'B' => value.ToString("MMMM", System.Globalization.CultureInfo.InvariantCulture),
                 'p' => value.ToString("tt", System.Globalization.CultureInfo.InvariantCulture),
                 'z' => value.ToString("zzz", System.Globalization.CultureInfo.InvariantCulture).Replace(":", ""),
-                'Z' => value.ToString("zzz", System.Globalization.CultureInfo.InvariantCulture),
+                'Z' => System.TimeZoneInfo.Local.IsDaylightSavingTime(value)
+                    ? System.TimeZoneInfo.Local.DaylightName
+                    : System.TimeZoneInfo.Local.StandardName,
                 'x' => value.ToString("MM/dd/yy", System.Globalization.CultureInfo.InvariantCulture),
                 'X' => value.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture),
                 'c' => value.ToString("ddd MMM dd HH:mm:ss yyyy", System.Globalization.CultureInfo.InvariantCulture),
@@ -911,7 +1207,7 @@ public sealed class SharpThonTimeStruct
     public int tm_sec => value.Second;
     public int tm_wday => ((int)value.DayOfWeek + 6) % 7;
     public int tm_yday => value.DayOfYear;
-    public int tm_isdst => 0;
+    public int tm_isdst => System.TimeZoneInfo.Local.IsDaylightSavingTime(value) ? 1 : 0;
 }
 """;
 }
